@@ -188,91 +188,66 @@ def call_nano_banana_api(
     extra_params: Dict[str, Any] = None
 ) -> bytes:
     """
-    Отправляет изображение и промпт в Gemini 2.5 Flash Image (Nano Banana) 
-    и корректно извлекает бинарные данные из ответа.
+    Отправляет изображение и промпт в Gemini 2.5 Flash Image и извлекает байты.
     """
     
-    # 1. Загрузка API Key и инициализация клиента
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        raise Exception(f"Ошибка инициализации Gemini клиента. Проверьте GEMINI_API_KEY в .env. Детали: {e}")
+    # 1. Инициализация клиента (предполагаем, что ключ загружен)
+    client = genai.Client()
 
-    # 2. Чтение изображения с помощью Pillow
+    # 2. Чтение изображения
     try:
         input_image = Image.open(input_image_path)
-    except FileNotFoundError:
-        raise ValueError(f"Исходный файл не найден: {input_image_path}")
     except Exception as e:
-        raise ValueError(f"Ошибка чтения изображения: {e}")
+        raise ValueError(f"Ошибка чтения исходного изображения: {e}")
 
-    logger.info(f"Отправка промпта '{prompt[:50]}...' и изображения в Gemini...")
-
-    # 3. Вызов модели Image-to-Image
+    # 3. Вызов модели
     config_params = extra_params if extra_params is not None else {}
     
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-image",
-            contents=[prompt, input_image],
-            **config_params
-        )
-    except exceptions.PermissionDenied as e:
-        if "location is not supported" in str(e).lower():
-            raise Exception(
-                "❌ Сервис недоступен в вашем регионе. "
-                "Для использования Gemini API требуется VPN или настройка в поддерживаемом регионе."
-            )
-        else:
-            raise e
-    except exceptions.FailedPrecondition as e:
-        if "location is not supported" in str(e).lower():
-            raise Exception(
-                "❌ Сервис недоступен в вашем регионе. "
-                "Для использования Gemini API требуется VPN или настройка в поддерживаемом регионе."
-            )
-        else:
-            raise e
-    except Exception as e:
-        raise Exception(f"Ошибка API: {str(e)}")
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-image",
+        contents=[prompt, input_image],
+        **config_params
+    )
     
     # 4. Корректная обработка и извлечение изображения
+    
     if not response.candidates:
         raise Exception("API не вернул кандидатов (candidates).")
-    
-    if not response.candidates[0].content.parts:
-        raise Exception("API не вернул частей контента (parts).")
 
     first_part = response.candidates[0].content.parts[0]
-
-    # 1. Проверяем, что это не текстовый ответ (фильтры безопасности)
+    
+    # Проверка на наличие inline_data (признак бинарного содержимого)
     if not hasattr(first_part, 'inline_data'):
+        # Если нет inline_data, проверяем, не вернул ли Gemini текст с объяснением
         if hasattr(first_part, 'text'):
-            # Возвращаем текст ошибки, если Gemini отказался генерировать
-            raise Exception(f"Gemini вернул текст вместо изображения (отклонен фильтром?): {first_part.text}")
+            raise Exception(f"Gemini вернул текст вместо изображения: {first_part.text}")
         else:
-            raise Exception("Получен ответ неизвестной структуры.")
+            raise Exception("Получен ответ с неизвестной структурой (ни изображение, ни текст).")
 
-    # 2. Получаем объект InlineData
+    # Получаем объект InlineData
     inline_data = first_part.inline_data
+    
+    # Бинарные данные всегда должны находиться в атрибуте .data
+    if not hasattr(inline_data, 'data'):
+        raise Exception(f"Объект inline_data не содержит атрибута 'data'. MIME-тип: {getattr(inline_data, 'mime_type', 'N/A')}")
 
-    # 3. Извлекаем бинарные данные
-    # В большинстве случаев, данные находятся в атрибуте .data и закодированы в Base64.
-    if hasattr(inline_data, 'data') and isinstance(inline_data.data, str):
+    data_content = inline_data.data
+    
+    if isinstance(data_content, str):
+        # 4.1. Если это строка, считаем, что это Base64 и декодируем
         try:
-            # Декодируем строку Base64 в чистые байты
-            output_image_bytes = base64.b64decode(inline_data.data)
-            logger.info(f"✅ Успешно декодировано изображение из Base64, размер: {len(output_image_bytes)} байт")
+            output_image_bytes = base64.b64decode(data_content)
         except Exception as e:
-            raise Exception(f"Ошибка декодирования Base64: {e}")
-    # Если данные уже являются байтами (менее частый случай, но для надежности)
-    elif hasattr(inline_data, 'data') and isinstance(inline_data.data, bytes):
-        output_image_bytes = inline_data.data
-        logger.info(f"✅ Успешно получены байты изображения, размер: {len(output_image_bytes)} байт")
+            raise Exception(f"Ошибка декодирования Base64. Возможно, данные не Base64. Ошибка: {e}")
+            
+    elif isinstance(data_content, bytes):
+        # 4.2. Если это уже байты, используем их напрямую
+        output_image_bytes = data_content
+        
     else:
-        # Если ни один из ожидаемых форматов не найден
-        raise Exception("Объект inline_data не содержит байтов изображения в ожидаемом формате (Base64/bytes).")
-
+        # 4.3. Неожиданный тип данных
+        raise Exception(f"Объект inline_data.data имеет неожиданный тип: {type(data_content)}. Ожидались str (Base64) или bytes.")
+        
     return output_image_bytes
 
 # Альтернативная функция для демонстрации (заглушка)
