@@ -220,19 +220,23 @@ def call_nano_banana_api(
         raise ValueError(f"Ошибка чтения исходного изображения: {e}")
 
     # 3. Вызов модели
-    config_params = extra_params if extra_params is not None else {}
+    # 🌟 ИСПРАВЛЕНИЕ: Используем 'config' вместо 'generation_config'
+    api_config = extra_params if extra_params is not None else {}
 
-    # Формируем generation_config, если он не передан
-    if 'generation_config' not in config_params:
-        config_params['generation_config'] = {
+    # Формируем 'config', если он не передан
+    if 'config' not in api_config:
+        api_config['config'] = {
             # Запрашиваем как изображение, так и текст (хотя ожидаем изображение)
+            # Примечание: для генерации изображений в API Gemini обычно не требуется
+            # указывать response_modalities. Этот ключ может быть лишним.
+            # Если возникнут проблемы, удалите этот блок полностью.
             "response_modalities": ['TEXT', 'IMAGE']
         }
 
     response = client.models.generate_content(
         model="gemini-2.5-flash-image",
         contents=[prompt, input_image],
-        **config_params
+        config=api_config.get('config') # Передаем только значение ключа 'config'
     )
 
     # 4. Корректная обработка и извлечение изображения
