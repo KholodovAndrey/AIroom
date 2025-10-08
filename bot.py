@@ -245,44 +245,40 @@ def call_nano_banana_api(
     if not response.candidates:
         raise Exception("API не вернул кандидатов (candidates).")
 
-    # 🌟 ИСПРАВЛЕНИЕ 1: Проверяем, был ли ответ заблокирован
     candidate = response.candidates[0]
-    if candidate.finish_reason != types.FinishReason.STOP:
-        # Пытаемся получить информацию о блокировке
-        safety_ratings = candidate.safety_ratings
-        block_reasons = ", ".join([
-            f"{rating.category.name}: {rating.probability.name}"
-            for rating in safety_ratings
-        ])
 
-        # Если есть текст, то это, вероятно, объяснение ошибки
-        first_part = candidate.content.parts[0]
-        error_text = getattr(first_part, 'text', 'Неизвестная причина.')
+    # 1. Ищем часть, которая содержит Изображение (inline_data с байтами 'data')
+    image_part = next(
+        (
+            p for p in candidate.content.parts
+            if hasattr(p, 'inline_data') and hasattr(p.inline_data, 'data')
+        ),
+        None
+    )
 
-        raise Exception(
-            f"Генерация была остановлена. Причина завершения: {candidate.finish_reason.name}. "
-            f"Причины безопасности: {block_reasons}. Текст ошибки: {error_text}"
-        )
+    if image_part is None:
+        # 2. Если изображение не найдено, ищем Текстовое объяснение (например, ошибку или блокировку)
+        text_explanation = ""
+        for part in candidate.content.parts:
+            if hasattr(part, 'text'):
+                text_explanation += part.text + "\n"
 
+        # Проверяем причину завершения (например, SAFETY)
+        finish_reason = candidate.finish_reason.name if hasattr(candidate, 'finish_reason') else "UNKNOWN"
 
-    # 🌟 ИСПРАВЛЕНИЕ 2: Ищем часть, содержащую inline_data
-    # Используем list comprehension, чтобы найти все части с изображением
-    image_parts = [p for p in candidate.content.parts if hasattr(p, 'inline_data')]
+        # Если есть текст, возвращаем его
+        if text_explanation.strip():
+            # Если текст найден, возвращаем его как ошибку с указанием причины завершения
+            raise Exception(
+                f"Gemini вернул текстовое объяснение вместо изображения. Причина завершения: {finish_reason}. "
+                f"Текст: {text_explanation.strip()}"
+            )
 
-    if not image_parts:
-        # Если нет изображения, ищем любой текст (может быть объяснением, почему фото нет)
-        text_part = candidate.content.parts[0]
-        if hasattr(text_part, 'text'):
-            raise Exception(f"Gemini вернул только текст вместо изображения: {text_part.text}")
-        else:
-            raise Exception("Получен ответ с неизвестной структурой (ни изображение, ни текст).")
+        # Если нет ни изображения, ни текста, выбрасываем общую ошибку
+        raise Exception(f"Получен ответ с неизвестной структурой. Причина завершения: {finish_reason}.")
 
-    # Получаем объект InlineData из первой найденной части с изображением
-    inline_data = image_parts[0].inline_data
-
-    if not hasattr(inline_data, 'data'):
-        raise Exception(f"Объект inline_data не содержит атрибута 'data'. MIME-тип: {getattr(inline_data, 'mime_type', 'N/A')}")
-
+    # 3. Если изображение найдено (image_part != None), извлекаем данные
+    inline_data = image_part.inline_data
     data_content = inline_data.data
 
     if isinstance(data_content, str):
@@ -297,7 +293,7 @@ def call_nano_banana_api(
         output_image_bytes = data_content
 
     else:
-        # Неожиданный тип данных
+        # Неожиданный тип данных (хотя этот блок теперь менее вероятен)
         raise Exception(f"Объект inline_data.data имеет неожиданный тип: {type(data_content)}. Ожидались str (Base64) или bytes.")
 
     return output_image_bytes
