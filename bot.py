@@ -24,6 +24,7 @@ from aiogram.utils.media_group import MediaGroupBuilder
 
 # Gemini imports
 from google import genai
+from google.genai import types
 from google.api_core import exceptions
 from PIL import Image
 import io
@@ -246,7 +247,7 @@ def call_nano_banana_api(
 
     # 🌟 ИСПРАВЛЕНИЕ 1: Проверяем, был ли ответ заблокирован
     candidate = response.candidates[0]
-    if candidate.finish_reason != genai.enums.FinishReason.STOP:
+    if candidate.finish_reason != types.FinishReason.STOP:
         # Пытаемся получить информацию о блокировке
         safety_ratings = candidate.safety_ratings
         block_reasons = ", ".join([
