@@ -19,8 +19,9 @@ from aiogram.utils.media_group import MediaGroupBuilder
 
 # Gemini imports
 from google import genai
+from google.api_core import exceptions
 from PIL import Image
-from typing import Union, Dict, Any
+import io
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -186,13 +187,8 @@ def call_nano_banana_api(
     extra_params: Dict[str, Any] = None
 ) -> bytes:
     """
-    Отправляет изображение и промпт в Gemini 2.5 Flash Image (Nano Banana).
-
-    :param input_image_path: Локальный путь к исходному изображению.
-    :param prompt: Текстовый промпт для редактирования.
-    :param extra_params: Дополнительные параметры для generate_content.
-    :return: Байты обработанного изображения (JPEG).
-    :raises Exception: Если API не вернул изображение или произошла ошибка.
+    Отправляет изображение и промпт в Gemini 2.5 Flash Image (Nano Banana) 
+    и корректно извлекает бинарные данные из ответа.
     """
     
     # 1. Загрузка API Key и инициализация клиента
@@ -212,33 +208,103 @@ def call_nano_banana_api(
     logger.info(f"Отправка промпта '{prompt[:50]}...' и изображения в Gemini...")
 
     # 3. Вызов модели Image-to-Image
-    
-    # Объединяем промпт и изображение в списке contents.
-    # Модель 'gemini-2.5-flash-image' понимает, что нужно отредактировать
-    # input_image на основе текстового prompt.
-    
     config_params = extra_params if extra_params is not None else {}
     
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-image",
-        contents=[
-            prompt, 
-            input_image
-        ],
-        **config_params
-    )
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-image",
+            contents=[prompt, input_image],
+            **config_params
+        )
+    except exceptions.PermissionDenied as e:
+        if "location is not supported" in str(e).lower():
+            raise Exception(
+                "❌ Сервис недоступен в вашем регионе. "
+                "Для использования Gemini API требуется VPN или настройка в поддерживаемом регионе."
+            )
+        else:
+            raise e
+    except exceptions.FailedPrecondition as e:
+        if "location is not supported" in str(e).lower():
+            raise Exception(
+                "❌ Сервис недоступен в вашем регионе. "
+                "Для использования Gemini API требуется VPN или настройка в поддерживаемом регионе."
+            )
+        else:
+            raise e
+    except Exception as e:
+        raise Exception(f"Ошибка API: {str(e)}")
     
-    # 4. Обработка ответа
-    if not response.candidates or not response.candidates[0].content.parts:
-        raise Exception("Gemini API не вернул изображений. Возможно, промпт или изображение были отклонены фильтрами безопасности или произошла ошибка сервера.")
+    # 4. Корректная обработка и извлечение изображения
+    if not response.candidates:
+        raise Exception("API не вернул кандидатов (candidates).")
+    
+    if not response.candidates[0].content.parts:
+        raise Exception("API не вернул частей контента (parts).")
 
-    # Получаем сгенерированную часть, которая должна содержать изображение
-    image_part = response.candidates[0].content.parts[0].image
-    
-    # Конвертируем объект ImagePart в байты JPEG (формат, удобный для Telegram)
-    output_image_bytes = image_part.image.getvalue()
-    
+    first_part = response.candidates[0].content.parts[0]
+
+    # Проверка, что part содержит изображение (inline_data)
+    if not hasattr(first_part, 'inline_data'):
+        # Если это текстовая часть, извлекаем текст ошибки/объяснения
+        if hasattr(first_part, 'text'):
+            raise Exception(f"Gemini вернул текст вместо изображения: {first_part.text}")
+        else:
+            raise Exception("Получен ответ, который не является ни изображением, ни текстом (неизвестная структура).")
+
+    # Получаем объект inline_data
+    image_data_object = first_part.inline_data
+
+    # Извлекаем байты изображения
+    if hasattr(image_data_object, 'data'):
+        # Основной способ извлечения байтов в последних версиях
+        output_image_bytes = image_data_object.data
+    elif hasattr(image_data_object, 'image') and hasattr(image_data_object.image, 'getvalue'):
+        # Для обратной совместимости
+        output_image_bytes = image_data_object.image.getvalue()
+    else:
+        raise Exception("Объект inline_data не содержит байтов изображения.")
+
+    logger.info(f"✅ Успешно получено изображение размером {len(output_image_bytes)} байт")
     return output_image_bytes
+
+# Альтернативная функция для демонстрации (заглушка)
+def generate_demo_image(prompt: str) -> bytes:
+    """Генерирует демо-изображение когда Gemini недоступен"""
+    from PIL import Image, ImageDraw, ImageFont
+    import io
+    
+    # Создаем простое изображение с текстом
+    img = Image.new('RGB', (512, 512), color=(73, 109, 137))
+    d = ImageDraw.Draw(img)
+    
+    # Простой текст вместо изображения
+    text = "Демо-режим\n\nПромпт:\n" + prompt[:100] + "..."
+    
+    # Разбиваем текст на строки
+    lines = []
+    words = text.split()
+    line = ""
+    for word in words:
+        test_line = line + word + " "
+        if len(test_line) > 30:
+            lines.append(line)
+            line = word + " "
+        else:
+            line = test_line
+    if line:
+        lines.append(line)
+    
+    # Рисуем текст
+    y = 50
+    for line in lines:
+        d.text((50, y), line, fill=(255, 255, 255))
+        y += 30
+    
+    # Сохраняем в bytes
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='JPEG')
+    return img_byte_arr.getvalue()
 
 class FashionBot:
     def __init__(self, token: str):
@@ -677,7 +743,7 @@ class FashionBot:
                 
                 await callback.message.answer_photo(
                     generated_image,
-                    caption="✨ Обработка с помощью Nano Banana завершена!"
+                    caption="✨ Генерация завершена успешно!"
                 )
                 
                 # Удаляем временное сообщение
@@ -686,10 +752,40 @@ class FashionBot:
             except Exception as e:
                 logger.error(f"Ошибка при генерации изображения: {e}")
                 await generating_msg.delete()
-                await callback.message.answer(
-                    f"❌ Произошла ошибка при генерации изображения:\n{str(e)}\n\n"
-                    f"Попробуйте изменить параметры или обратитесь в поддержку."
-                )
+                
+                error_msg = str(e)
+                if "location is not supported" in error_msg.lower():
+                    await callback.message.answer(
+                        "❌ Сервис генерации изображений недоступен в вашем регионе.\n\n"
+                        "Возможные решения:\n"
+                        "• Используйте VPN\n"
+                        "• Настройте Google Cloud проект в поддерживаемом регионе\n"
+                        "• Обратитесь к администратору\n\n"
+                        "Ваш баланс был возвращен."
+                    )
+                    # Возвращаем баланс
+                    self.db.update_user_balance(user_id, current_balance)
+                else:
+                    # Для других ошибок пробуем демо-режим
+                    try:
+                        await callback.message.answer("🔄 Пробуем демо-режим...")
+                        demo_image_bytes = generate_demo_image(prompt)
+                        demo_image = BufferedInputFile(demo_image_bytes, filename="demo_fashion.jpg")
+                        
+                        await callback.message.answer_photo(
+                            demo_image,
+                            caption=(
+                                "🔄 Демо-режим (Gemini API недоступен)\n\n"
+                                f"Ошибка: {error_msg}\n\n"
+                                "Обратитесь к администратору для настройки сервиса."
+                            )
+                        )
+                    except Exception as demo_error:
+                        await callback.message.answer(
+                            f"❌ Критическая ошибка:\n{error_msg}\n\n"
+                            f"Демо-режим также не сработал: {demo_error}\n\n"
+                            "Пожалуйста, обратитесь в поддержку."
+                        )
                 
             finally:
                 # Удаляем временный файл
