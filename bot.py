@@ -4,6 +4,7 @@ import sqlite3
 import os
 import sys
 import tempfile
+import base64
 from enum import Enum
 from typing import Dict, Any
 from dataclasses import dataclass
@@ -244,28 +245,34 @@ def call_nano_banana_api(
 
     first_part = response.candidates[0].content.parts[0]
 
-    # Проверка, что part содержит изображение (inline_data)
+    # 1. Проверяем, что это не текстовый ответ (фильтры безопасности)
     if not hasattr(first_part, 'inline_data'):
-        # Если это текстовая часть, извлекаем текст ошибки/объяснения
         if hasattr(first_part, 'text'):
-            raise Exception(f"Gemini вернул текст вместо изображения: {first_part.text}")
+            # Возвращаем текст ошибки, если Gemini отказался генерировать
+            raise Exception(f"Gemini вернул текст вместо изображения (отклонен фильтром?): {first_part.text}")
         else:
-            raise Exception("Получен ответ, который не является ни изображением, ни текстом (неизвестная структура).")
+            raise Exception("Получен ответ неизвестной структуры.")
 
-    # Получаем объект inline_data
-    image_data_object = first_part.inline_data
+    # 2. Получаем объект InlineData
+    inline_data = first_part.inline_data
 
-    # Извлекаем байты изображения
-    if hasattr(image_data_object, 'data'):
-        # Основной способ извлечения байтов в последних версиях
-        output_image_bytes = image_data_object.data
-    elif hasattr(image_data_object, 'image') and hasattr(image_data_object.image, 'getvalue'):
-        # Для обратной совместимости
-        output_image_bytes = image_data_object.image.getvalue()
+    # 3. Извлекаем бинарные данные
+    # В большинстве случаев, данные находятся в атрибуте .data и закодированы в Base64.
+    if hasattr(inline_data, 'data') and isinstance(inline_data.data, str):
+        try:
+            # Декодируем строку Base64 в чистые байты
+            output_image_bytes = base64.b64decode(inline_data.data)
+            logger.info(f"✅ Успешно декодировано изображение из Base64, размер: {len(output_image_bytes)} байт")
+        except Exception as e:
+            raise Exception(f"Ошибка декодирования Base64: {e}")
+    # Если данные уже являются байтами (менее частый случай, но для надежности)
+    elif hasattr(inline_data, 'data') and isinstance(inline_data.data, bytes):
+        output_image_bytes = inline_data.data
+        logger.info(f"✅ Успешно получены байты изображения, размер: {len(output_image_bytes)} байт")
     else:
-        raise Exception("Объект inline_data не содержит байтов изображения.")
+        # Если ни один из ожидаемых форматов не найден
+        raise Exception("Объект inline_data не содержит байтов изображения в ожидаемом формате (Base64/bytes).")
 
-    logger.info(f"✅ Успешно получено изображение размером {len(output_image_bytes)} байт")
     return output_image_bytes
 
 # Альтернативная функция для демонстрации (заглушка)
