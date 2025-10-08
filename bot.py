@@ -244,19 +244,40 @@ def call_nano_banana_api(
     if not response.candidates:
         raise Exception("API не вернул кандидатов (candidates).")
 
-    # Ищем часть, содержащую inline_data
-    first_part = next((p for p in response.candidates[0].content.parts if hasattr(p, 'inline_data')), None)
+    # 🌟 ИСПРАВЛЕНИЕ 1: Проверяем, был ли ответ заблокирован
+    candidate = response.candidates[0]
+    if candidate.finish_reason != genai.enums.FinishReason.STOP:
+        # Пытаемся получить информацию о блокировке
+        safety_ratings = candidate.safety_ratings
+        block_reasons = ", ".join([
+            f"{rating.category.name}: {rating.probability.name}"
+            for rating in safety_ratings
+        ])
 
-    if not first_part:
-        # Если нет inline_data, проверяем, не вернул ли Gemini текст с объяснением
-        text_part = response.candidates[0].content.parts[0]
+        # Если есть текст, то это, вероятно, объяснение ошибки
+        first_part = candidate.content.parts[0]
+        error_text = getattr(first_part, 'text', 'Неизвестная причина.')
+
+        raise Exception(
+            f"Генерация была остановлена. Причина завершения: {candidate.finish_reason.name}. "
+            f"Причины безопасности: {block_reasons}. Текст ошибки: {error_text}"
+        )
+
+
+    # 🌟 ИСПРАВЛЕНИЕ 2: Ищем часть, содержащую inline_data
+    # Используем list comprehension, чтобы найти все части с изображением
+    image_parts = [p for p in candidate.content.parts if hasattr(p, 'inline_data')]
+
+    if not image_parts:
+        # Если нет изображения, ищем любой текст (может быть объяснением, почему фото нет)
+        text_part = candidate.content.parts[0]
         if hasattr(text_part, 'text'):
             raise Exception(f"Gemini вернул только текст вместо изображения: {text_part.text}")
         else:
             raise Exception("Получен ответ с неизвестной структурой (ни изображение, ни текст).")
 
-    # Получаем объект InlineData
-    inline_data = first_part.inline_data
+    # Получаем объект InlineData из первой найденной части с изображением
+    inline_data = image_parts[0].inline_data
 
     if not hasattr(inline_data, 'data'):
         raise Exception(f"Объект inline_data не содержит атрибута 'data'. MIME-тип: {getattr(inline_data, 'mime_type', 'N/A')}")
