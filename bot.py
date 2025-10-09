@@ -210,7 +210,7 @@ class Database:
 
         return total_users, total_generations, total_balance
 
-# --- Функция вызова API Gemini (ИСПРАВЛЕНО) ---
+# --- Функция вызова API Gemini (ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ и ОТЛАДКА) ---
 
 def call_nano_banana_api(
     input_image_path: str,
@@ -223,7 +223,6 @@ def call_nano_banana_api(
     if GEMINI_DEMO_MODE:
         img = Image.new('RGB', (1024, 1024), color=(73, 109, 137))
         d = ImageDraw.Draw(img)
-        # Упрощенная логика для краткости
         d.text((50, 50), "ДЕМО-РЕЖИМ. Промпт: " + prompt[:100] + "...", fill=(255, 255, 255))
         img_byte_arr = io.BytesIO()
         img.save(img_byte_arr, format='PNG')
@@ -253,13 +252,19 @@ def call_nano_banana_api(
         raise Exception(f"Превышен лимит API (Resource Exhausted). Детали: {e}")
     except exceptions.InternalServerError as e:
         raise Exception(f"Внутренняя ошибка API Gemini. Детали: {e}")
+    except exceptions.GoogleAPICallError as e:
+        raise Exception(f"Ошибка вызова API Gemini: {e}")
     except Exception as e:
         raise Exception(f"Неизвестная ошибка API Gemini: {e}")
 
-    # 3. Корректная обработка и извлечение изображения (Улучшенная логика)
+    # 3. Корректная обработка и извлечение изображения
 
     if not response.candidates:
-        raise Exception("API не вернул кандидатов (candidates).")
+        # Если нет кандидатов, проверяем, нет ли ошибки на уровне ответа.
+        if hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason != types.BlockReason.BLOCK_REASON_UNSPECIFIED:
+             raise Exception(f"Запрос заблокирован по причине: {response.prompt_feedback.block_reason.name}")
+
+        raise Exception("API не вернул кандидатов (candidates) и не указал причину блокировки.")
 
     candidate = response.candidates[0]
 
@@ -281,19 +286,19 @@ def call_nano_banana_api(
 
         finish_reason = candidate.finish_reason.name if hasattr(candidate, 'finish_reason') else "UNKNOWN"
 
+        # Если модель остановилась не из-за 'STOP', это почти всегда проблема.
         if finish_reason != types.FinishReason.STOP.name:
             safety_info = ", ".join([f"{r.category.name}: {r.probability.name}" for r in candidate.safety_ratings])
 
+            error_msg = f"Генерация остановлена. Причина: {finish_reason}."
             if text_explanation.strip():
-                raise Exception(
-                    f"Генерация остановлена. Причина: {finish_reason}. Текст: {text_explanation.strip()}."
-                    f" Safety: {safety_info}"
-                )
+                error_msg += f" Текст: {text_explanation.strip()}."
+            error_msg += f" Safety: {safety_info}"
 
-            raise Exception(f"Генерация остановлена. Причина: {finish_reason}. Safety: {safety_info}")
+            raise Exception(error_msg)
 
         if text_explanation.strip():
-            # Если нет изображения, но есть текст, то это ошибка
+            # Если нет изображения, но есть текст (и причина STOP), модель могла выдать текст-заглушку.
             raise Exception(f"Gemini вернул только текст, но не изображение: {text_explanation.strip()}")
 
         raise Exception(f"Получен ответ с неизвестной структурой. Причина завершения: {finish_reason}.")
@@ -301,9 +306,9 @@ def call_nano_banana_api(
     # 3.3. Если изображение найдено, извлекаем данные
     inline_data = image_part.inline_data
     data_content = inline_data.data
-    mime_type = getattr(inline_data, 'mime_type', 'N/A') # Получаем MIME-тип
+    mime_type = getattr(inline_data, 'mime_type', 'N/A')
 
-    # НОВАЯ ПРОВЕРКА: Если MIME-тип не похож на изображение, выбрасываем ошибку
+    # ПРОВЕРКА: Если MIME-тип не похож на изображение, выбрасываем ошибку
     if not mime_type.lower().startswith("image/"):
          raise Exception(f"Ожидалось изображение, но получен MIME-тип: {mime_type}. Возможно, модель вернула невалидный файл.")
 
@@ -320,9 +325,14 @@ def call_nano_banana_api(
     else:
         raise Exception(f"Объект inline_data.data имеет неожиданный тип: {type(data_content)}. Ожидались str (Base64) или bytes.")
 
+    # ДОБАВЛЕНА ОТЛАДОЧНАЯ ПРОВЕРКА: Если Gemini вернул пустые байты
+    if len(output_image_bytes) == 0:
+        logger.error("--- DEBUG: API вернул пустые байты изображения (длина 0). ---")
+        raise Exception("API вернул пустые данные (длина 0).")
+
     return output_image_bytes
 
-# --- Главный класс бота и обработчики (ФИНАЛЬНАЯ ВЕРСИЯ) ---
+# --- Главный класс бота и обработчики ---
 
 class FashionBot:
     def __init__(self, token: str):
@@ -380,13 +390,14 @@ class FashionBot:
         gender = data.get('gender')
 
         if gender == GenderType.DISPLAY:
+            # Усиленный промпт для витринного фото
             return (
-                "Product photography for e-commerce. Replace the background of this product image with a stylish, modern, minimalist display zone, "
-                "like a smooth white floor or a light-colored wooden table. Maintain the garment's texture and shape perfectly. "
+                "**Product photography for e-commerce.** Replace the background of this product image with a stylish, modern, minimalist display zone, "
+                "like a smooth white floor or a light-colored wooden table. **Maintain the garment's texture and shape perfectly.** "
                 "Ensure the product is clearly the main subject. "
                 "Remove any distractions like shadows or wrinkles from the background. "
-                "The image must be hyper-realistic, high-resolution, and professionally lit. "
-                "Crucially, do not add any human model or mannequin." # Усиление
+                "The image must be **hyper-realistic, high-resolution**, and professionally lit. "
+                "**Crucially, do not add any human model or mannequin.**"
             )
 
         prompt = "Generate a hyper-realistic, high-quality professional fashion photo for e-commerce. "
@@ -432,10 +443,12 @@ class FashionBot:
 
         prompt += style_desc + " "
 
+        # Усиленный финальный блок промпта
         prompt += (
             "Use the input image only as a reference for the garment and texture. The generated photo must look "
             "like a real photograph taken by a professional fashion photographer. "
-            "Natural skin, realistic hands, perfect lighting. "
+            "Model's face must be **beautiful, natural, and realistic, avoiding any distortion**. "
+            "Natural skin, realistic hands, perfect lighting, **shallow depth of field (bokeh)**. "
             "Remove the background from the input image and perfectly integrate the garment onto the model. "
             "Do not use cartoon, 3D render, or drawing styles. "
             "The final image should be a single, stunning photograph."
@@ -621,15 +634,15 @@ class FashionBot:
 
         if gender != GenderType.DISPLAY:
             try:
-                media_group = MediaGroupBuilder()
-                # При условии, что у вас есть эти файлы
+                # ПРОВЕРКА: Убедитесь, что папка 'photo/' существует и содержит эти файлы!
                 photo1 = FSInputFile("photo/example1.jpg")
                 photo2 = FSInputFile("photo/example2.jpg")
+                media_group = MediaGroupBuilder()
                 media_group.add_photo(media=photo1, caption="Пример 1: Фотография товара, преобразованная в студийный снимок на модели.")
                 media_group.add_photo(media=photo2, caption="Пример 2: Фотография товара, преобразованная в уличный снимок на модели.")
                 await callback.message.answer_media_group(media=media_group.build())
             except Exception as e:
-                logger.warning(f"Не удалось загрузить или отправить примеры фото: {e}")
+                logger.warning(f"Не удалось загрузить или отправить примеры фото (Проверьте photo/example.jpg): {e}")
 
 
         instruction_text = (
@@ -659,6 +672,7 @@ class FashionBot:
             temp_file_name = f"temp_{message.from_user.id}_{int(time.time())}.jpg"
             temp_path = os.path.join(tempfile.gettempdir(), temp_file_name)
 
+            # Скачивание файла во временную папку
             await self.bot.download_file(file_path, temp_path)
             await state.update_data(temp_photo_path=temp_path)
 
@@ -673,6 +687,7 @@ class FashionBot:
         gender = data['gender']
 
         if gender == GenderType.DISPLAY:
+            # Пропускаем остальные шаги для витринного фото
             final_prompt = await self.generate_prompt(data)
             await state.update_data(prompt=final_prompt)
 
@@ -864,7 +879,7 @@ class FashionBot:
 
 
     async def confirmation_handler(self, callback: CallbackQuery, state: FSMContext):
-        """Обработчик подтверждения генерации (ФИНАЛЬНО ИСПРАВЛЕН)"""
+        """Обработчик подтверждения генерации (ФИНАЛЬНЫЙ С УЛУЧШЕННОЙ ОБРАБОТКОЙ ОШИБОК)"""
         await callback.message.edit_reply_markup(reply_markup=None)
 
         if callback.data != "confirm_generate":
@@ -879,6 +894,7 @@ class FashionBot:
             await state.clear()
             return await callback.message.answer("❌ Ошибка: Недостаточно данных для генерации. Начните сначала.", reply_markup=InlineKeyboardBuilder().button(text="🔙 Назад", callback_data="back_to_main").as_markup())
 
+        # Списание баланса (только если это не Админ)
         if user_id != ADMIN_ID and not self.db.deduct_balance(user_id, cost=1):
             await state.clear()
             return await callback.message.answer("❌ Недостаточно генераций. Пожалуйста, пополните баланс.", reply_markup=InlineKeyboardBuilder().button(text="💳 Пополнить", callback_data="topup_balance").as_markup())
@@ -888,6 +904,8 @@ class FashionBot:
 
         output_image_bytes = None
         generation_successful = False
+        balance_deducted = (user_id == ADMIN_ID) or True # Предполагаем, что списание произошло, чтобы вернуть его в случае сбоя
+
         try:
             # 1. Вызов API
             output_image_bytes = call_nano_banana_api(temp_photo_path, final_prompt)
@@ -896,18 +914,16 @@ class FashionBot:
             image_stream = io.BytesIO(output_image_bytes)
             img = Image.open(image_stream)
 
-            # --- КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительное пересохранение в PNG ---
-            # Это исключает возможность ошибки UnidentifiedImageError, если Gemini вернул нестандартный формат
+            # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительное пересохранение в PNG
             temp_output = io.BytesIO()
             img.save(temp_output, format='PNG')
             output_image_bytes = temp_output.getvalue()
-            # -------------------------------------------------------------------
 
-            # 3. Успешная генерация
+            # 4. Успешная генерация
             generation_successful = True
             self.db.add_generation(user_id, final_prompt)
 
-            # 4. Отправка результата
+            # 5. Отправка результата
             result_photo = BufferedInputFile(output_image_bytes, filename="fashion_ai_result.png")
 
             success_caption = (
@@ -928,9 +944,12 @@ class FashionBot:
                 parse_mode="Markdown"
             )
 
+        # Блок обработки ошибок
         except (UnidentifiedImageError, exceptions.GoogleAPICallError, ValueError) as e:
-            # Ошибка PIL, Gemini API или ошибка декодирования
-            if user_id != ADMIN_ID:
+            # Ошибка PIL, Gemini API или ошибка декодирования/валидации
+
+            # Возврат баланса, если он был списан и генерация не удалась
+            if user_id != ADMIN_ID and balance_deducted and not generation_successful:
                 self.db.add_balance(user_id, 1)
 
             error_details = str(e)
@@ -938,18 +957,18 @@ class FashionBot:
             error_message = (
                 f"❌ **Ошибка генерации (Сбой API или формата)**\n\n"
                 f"Произошел сбой при обработке: \n"
-                f"```\n{error_details[:400]}...\n```"
+                f"```\n{error_details[:500]}...\n```" # Увеличен вывод для лучшей диагностики
             )
 
-            logger.error(f"Ошибка при генерации изображения: {e}")
+            logger.error(f"Ошибка при генерации изображения: {e}", exc_info=True) # exc_info=True для полного traceback
 
             builder = InlineKeyboardBuilder()
             builder.button(text="🔙 Назад", callback_data="back_to_main")
             await callback.message.answer(error_message, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
         except Exception as e:
-            # Общая непредвиденная ошибка (например, ошибка Telegram)
-            if user_id != ADMIN_ID and not generation_successful:
+            # Общая непредвиденная ошибка
+            if user_id != ADMIN_ID and balance_deducted and not generation_successful:
                 self.db.add_balance(user_id, 1)
 
             error_details = str(e)
@@ -957,19 +976,19 @@ class FashionBot:
             error_message = (
                 f"❌ **Непредвиденная ошибка**\n\n"
                 f"Произошла непредвиденная ошибка: \n"
-                f"```\n{error_details[:400]}...\n```"
+                f"```\n{error_details[:500]}...\n```"
             )
-            logger.error(f"Непредвиденная ошибка: {e}")
+            logger.critical(f"КРИТИЧЕСКАЯ ОШИБКА БОТА: {e}", exc_info=True)
 
             builder = InlineKeyboardBuilder()
             builder.button(text="🔙 Назад", callback_data="back_to_main")
             await callback.message.answer(error_message, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
         finally:
+            # Очистка
             if temp_photo_path and os.path.exists(temp_photo_path):
                 os.unlink(temp_photo_path)
 
-            # Безопасное удаление сообщения, если оно существует
             try:
                 await self.bot.delete_message(chat_id=sent_message.chat.id, message_id=sent_message.message_id)
             except Exception:
@@ -989,6 +1008,10 @@ if __name__ == "__main__":
     try:
         if not os.path.exists(tempfile.gettempdir()):
             os.makedirs(tempfile.gettempdir())
+
+        # Убедитесь, что папка 'photo' существует для примеров!
+        if not os.path.exists("photo"):
+             os.makedirs("photo")
 
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
