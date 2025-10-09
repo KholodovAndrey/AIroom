@@ -63,6 +63,7 @@ class ProductCreationStates(StatesGroup):
     waiting_for_gender = State()
     waiting_for_photo = State()
     waiting_for_height = State()
+    waiting_for_length = State()
     waiting_for_location = State()
     waiting_for_age = State()
     waiting_for_size = State()

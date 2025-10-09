@@ -79,6 +79,7 @@ async def generate_prompt(data: Dict[str, Any]) -> str:
 
     gender_text = gender.value
     height = data.get('height', '170')
+    length = data.get('length', '70') 
     location = data.get('location', LocationType.STUDIO).value
     age = data.get('age', '25-35')
     size = data.get('size', SizeType.SIZE_42_46).value if gender != GenderType.KIDS else ""
@@ -121,6 +122,7 @@ async def generate_summary(data: Dict[str, Any]) -> str:
         summary_parts.append(f"👀 **Ракурс**: {view_text}")
     elif gender != GenderType.DISPLAY:
         summary_parts.append(f"📏 **Рост модели**: {data.get('height', 'Не указан')} см")
+        summary_parts.append(f"📐 **Длина изделия**: {data.get('length', 'Не указана')} см")
         summary_parts.append(f"📍 **Локация**: {data.get('location', LocationType.STUDIO).value}")
         summary_parts.append(f"🎂 **Возраст модели**: {data.get('age', 'Не указан')}")
 
@@ -256,6 +258,20 @@ async def height_handler(message: Message, state: FSMContext):
         return
 
     await state.update_data(height=height)
+    await state.set_state(ProductCreationStates.waiting_for_length)
+    
+    await message.answer("📏 Теперь введите длину изделия в см:")
+
+
+@router.message(StateFilter(ProductCreationStates.waiting_for_length))
+async def length_handler(message: Message, state: FSMContext):
+    """Обработчик ввода длины изделия"""
+    length = message.text
+    if not length.isdigit():
+        await message.answer("❌ Пожалуйста, введите числовое значение длины в см:")
+        return
+
+    await state.update_data(length=length)
     await state.set_state(ProductCreationStates.waiting_for_location)
 
     await message.answer("📍 Пожалуйста выберите локацию:", reply_markup=get_location_keyboard())
