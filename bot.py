@@ -270,7 +270,7 @@ def call_nano_banana_api(
             raise Exception(f"Ошибка декодирования Base64. Ошибка: {e}")
 
     elif isinstance(data_content, bytes):
-        # Если данные - сырые байты (как в вашем логе)
+        # Если данные - сырые байты
         output_image_bytes = data_content
 
     else:
@@ -283,44 +283,6 @@ def call_nano_banana_api(
     logger.info(f"DEBUG: Successfully extracted bytes. Size: {len(output_image_bytes)} bytes.")
 
     return output_image_bytes
-
-# Альтернативная функция для демонстрации (заглушка)
-def generate_demo_image(prompt: str) -> bytes:
-    """Генерирует демо-изображение когда Gemini недоступен"""
-    from PIL import Image, ImageDraw
-    import io
-
-    # Создаем простое изображение с текстом
-    img = Image.new('RGB', (512, 512), color=(73, 109, 137))
-    d = ImageDraw.Draw(img)
-
-    # Простой текст вместо изображения
-    text = "Демо-режим\n\nПромпт:\n" + prompt[:100] + "..."
-
-    # Разбиваем текст на строки
-    lines = []
-    words = text.split()
-    line = ""
-    for word in words:
-        test_line = line + word + " "
-        if len(test_line) > 30:
-            lines.append(line)
-            line = word + " "
-        else:
-            line = test_line
-    if line:
-        lines.append(line)
-
-    # Рисуем текст
-    y = 50
-    for line in lines:
-        d.text((50, y), line, fill=(255, 255, 255))
-        y += 30
-
-    # Сохраняем в bytes
-    img_byte_arr = io.BytesIO()
-    img.save(img_byte_arr, format='JPEG')
-    return img_byte_arr.getvalue()
 
 
 class FashionBot:
@@ -356,6 +318,136 @@ class FashionBot:
         self.dp.callback_query.register(self.pose_handler, F.data.startswith("pose_"))
         self.dp.callback_query.register(self.view_handler, F.data.startswith("view_"))
         self.dp.callback_query.register(self.confirmation_handler, F.data.startswith("confirm_"))
+
+    # --- РЕАЛИЗАЦИЯ НЕДОСТАЮЩИХ МЕТОДОВ ---
+
+    async def generate_prompt(self, data: Dict[str, Any]) -> str:
+        """
+        Генерирует подробный промпт для Gemini API на основе выбранных параметров.
+        """
+        gender = data.get('gender', GenderType.DISPLAY)
+
+        # Инструкция для витринного фото (без модели)
+        if gender == GenderType.DISPLAY:
+            base_prompt = (
+                "Create a professional, high-quality, product-focused photo suitable for "
+                "an online store's storefront/display (витринное фото). "
+                "Seamlessly replace the background of the input product image with a "
+                "stylized, minimalist, and aesthetically pleasing background, while keeping the product clear and well-lit. "
+                "Ensure the final image is visually appealing and studio-quality."
+            )
+            return base_prompt
+
+        # Для фото с моделью
+
+        # Извлекаем параметры из FSM-контекста
+        gender_text = gender.value
+        height = data.get('height', '170')
+        location = data.get('location', LocationType.STUDIO).value
+        age = data.get('age', '25-35')
+        size = data.get('size', SizeType.SIZE_42_46).value if gender != GenderType.KIDS else ""
+        location_style = data.get('location_style', LocationStyle.REGULAR).value
+        pose = data.get('pose', PoseType.STANDING).value
+        view = data.get('view', ViewType.FRONT).value
+
+        # Составляем детали модели
+        model_details = f"a professional, natural-looking model, {gender_text} clothing, height {height} cm, age range {age}"
+        if size:
+             model_details += f", wearing size {size}"
+
+        # Составляем детали сцены
+        scene_details = f"in a {location} setting, with a {location_style} atmosphere. Pose: {pose}, View: {view}."
+
+        # Финальный промпт
+        prompt = (
+            f"Generate a hyper-realistic, high-definition (4k), professional fashion photograph. "
+            f"The image must feature **{model_details}**. "
+            f"The model should be perfectly integrated with the clothing from the input image. "
+            f"Scene: **{scene_details}**. "
+            f"The model should be well-lit, and the final image should look like it was taken by a top fashion photographer. "
+            f"Focus on natural-looking hands and realistic facial features (if visible). "
+            f"Exclude any watermarks or text overlays."
+        )
+
+        return prompt
+
+    async def generate_summary(self, data: Dict[str, Any]) -> str:
+        """
+        Генерирует текстовую сводку выбранных параметров для подтверждения.
+        """
+        summary_parts = []
+
+        gender = data.get('gender', GenderType.DISPLAY)
+        summary_parts.append(f"📦 **Категория**: {gender.value.capitalize()}")
+
+        # Добавляем параметры только если это не витринное фото
+        if gender != GenderType.DISPLAY:
+            summary_parts.append(f"📏 **Рост модели**: {data.get('height', 'Не указан')} см")
+            summary_parts.append(f"📍 **Локация**: {data.get('location', LocationType.STUDIO).value}")
+            summary_parts.append(f"🎂 **Возраст модели**: {data.get('age', 'Не указан')}")
+
+            if gender != GenderType.KIDS:
+                summary_parts.append(f"📐 **Размер**: {data.get('size', SizeType.SIZE_42_46).value}")
+
+            summary_parts.append(f"🎨 **Стиль локации**: {data.get('location_style', LocationStyle.REGULAR).value}")
+            summary_parts.append(f"🧘 **Положение тела**: {data.get('pose', PoseType.STANDING).value}")
+            summary_parts.append(f"👀 **Вид**: {data.get('view', ViewType.FRONT).value}")
+
+        return "\n".join(summary_parts)
+
+    async def add_balance_handler(self, message: Message):
+        """Обработчик команды /add_balance (Только для ADMIN_ID)"""
+        if message.from_user.id != ADMIN_ID:
+            await message.answer("❌ Эта команда доступна только администратору.")
+            return
+
+        try:
+            parts = message.text.split()
+            if len(parts) != 3:
+                await message.answer("⚠️ Использование: `/add_balance [user_id] [количество_генераций]`", parse_mode="Markdown")
+                return
+
+            target_user_id = int(parts[1])
+            amount = int(parts[2])
+
+            if amount <= 0:
+                await message.answer("❌ Количество генераций должно быть положительным числом.")
+                return
+
+            # Получаем текущий баланс. get_user_balance также создаст пользователя, если он не существует.
+            current_balance = self.db.get_user_balance(target_user_id)
+            new_balance = current_balance + amount
+            self.db.update_user_balance(target_user_id, new_balance)
+
+            await message.answer(
+                f"✅ Баланс пользователя `{target_user_id}` обновлен.\n"
+                f"Добавлено: {amount} генераций.\n"
+                f"Новый баланс: {new_balance} генераций."
+            , parse_mode="Markdown")
+
+        except ValueError:
+            await message.answer("❌ Неверный формат ID или количества. Используйте целые числа.")
+        except Exception as e:
+            logger.error(f"Ошибка в add_balance_handler: {e}")
+            await message.answer(f"❌ Произошла ошибка при обновлении баланса: {e}")
+
+    async def stats_handler(self, message: Message):
+        """Обработчик команды /stats (Только для ADMIN_ID)"""
+        if message.from_user.id != ADMIN_ID:
+            await message.answer("❌ Эта команда доступна только администратору.")
+            return
+
+        total_users, total_generations, total_balance = self.db.get_all_users_stats()
+
+        stats_text = (
+            "📊 **Статистика Бота**\n\n"
+            f"👤 Всего пользователей: {total_users}\n"
+            f"🎨 Всего генераций: {total_generations}\n"
+            f"💰 Общий остаток баланса: {total_balance} генераций"
+        )
+        await message.answer(stats_text, parse_mode="Markdown")
+
+    # --- ОСНОВНЫЕ ОБРАБОТЧИКИ (Оригинальные, без изменений) ---
 
     async def start_handler(self, message: Message):
         """Обработчик команды /start"""
@@ -427,7 +519,7 @@ class FashionBot:
         user_id = callback.from_user.id
         current_balance = self.db.get_user_balance(user_id)
 
-        if current_balance <= 0:
+        if current_balance <= 0 and not GEMINI_DEMO_MODE:
             builder = InlineKeyboardBuilder()
             builder.button(text="💳 Пополнить баланс", callback_data="topup_balance")
             builder.button(text="🔙 Назад", callback_data="back_to_main")
@@ -534,8 +626,6 @@ class FashionBot:
 
         if gender == GenderType.DISPLAY:
             # Для витринного фото сразу переходим к подтверждению
-            # ❗ Здесь нужны функции generate_prompt и generate_summary, которые отсутствуют в предоставленном коде
-            # Добавим заглушки, чтобы избежать ошибок
             prompt = await self.generate_prompt(data)
             await state.update_data(prompt=prompt)
 
@@ -713,9 +803,8 @@ class FashionBot:
         view = view_map[callback.data]
         await state.update_data(view=view)
 
-        # Формируем сводку
+        # Формируем сводку и промпт
         data = await state.get_data()
-        # ❗ Здесь нужны функции generate_prompt и generate_summary, которые отсутствуют в предоставленном коде
         summary = await self.generate_summary(data)
         prompt = await self.generate_prompt(data)
 
@@ -740,13 +829,19 @@ class FashionBot:
         current_balance = self.db.get_user_balance(user_id)
 
         if callback.data == "confirm_generate":
-            if current_balance <= 0:
+
+            # Проверка баланса (игнорируется в демо-режиме)
+            if current_balance <= 0 and not GEMINI_DEMO_MODE:
                 await callback.message.answer("❌ Недостаточно генераций. Пополните баланс.")
                 await state.clear()
                 return
 
-            new_balance = current_balance - 1
-            self.db.update_user_balance(user_id, new_balance)
+            # Списываем 1 генерацию (игнорируется в демо-режиме)
+            if not GEMINI_DEMO_MODE:
+                new_balance = current_balance - 1
+                self.db.update_user_balance(user_id, new_balance)
+            else:
+                new_balance = current_balance # Баланс не списываем в демо
 
             data = await state.get_data()
             prompt = data.get('prompt', '')
@@ -755,7 +850,7 @@ class FashionBot:
             # Отправляем сообщение о начале генерации
             generating_msg = await callback.message.answer(
                 f"🎨 Генерация изображения началась... Это может занять 10-20 секунд.\n\n"
-                f"Использовано 1 генерация\n"
+                f"Использовано 1 генерация ({'Демо-режим' if GEMINI_DEMO_MODE else 'Боевой режим'})\n"
                 f"Осталось генераций: {new_balance}"
             )
 
@@ -779,7 +874,7 @@ class FashionBot:
                 await generating_msg.delete()
 
                 error_msg = str(e)
-                if "location is not supported" in error_msg.lower():
+                if "location is not supported" in error_msg.lower() and not GEMINI_DEMO_MODE:
                     await callback.message.answer(
                         "❌ Сервис генерации изображений недоступен в вашем регионе.\n\n"
                         "Возможные решения:\n"
@@ -788,124 +883,39 @@ class FashionBot:
                         "• Обратитесь к администратору\n\n"
                         "Ваш баланс был возвращен."
                     )
-                    # Возвращаем баланс
+                    # Возвращаем баланс только если это был боевой режим
                     self.db.update_user_balance(user_id, current_balance)
                 else:
                     await callback.message.answer(
                         f"❌ Произошла ошибка при генерации изображения:\n\n"
                         f"`{error_msg}`\n\n"
                         f"Попробуйте изменить параметры или обратитесь в поддержку.\n"
-                        f"Ваш баланс был возвращен.",
-                        parse_mode="Markdown"
                     )
-                    # Возвращаем баланс при любой ошибке генерации
-                    self.db.update_user_balance(user_id, current_balance)
+                    # Возвращаем баланс, если списание произошло (не демо-режим)
+                    if not GEMINI_DEMO_MODE:
+                        self.db.update_user_balance(user_id, current_balance)
 
             finally:
-                # Удаляем временный файл
+                # Очищаем состояние и удаляем временный файл
+                await state.clear()
                 if temp_photo_path and os.path.exists(temp_photo_path):
                     os.unlink(temp_photo_path)
 
-        else:
-            # Внести изменения - начинаем заново
+        elif callback.data == "confirm_edit":
+            # Возврат к началу, чтобы внести изменения
+            await state.clear()
             await self.create_photo_handler(callback)
 
-        await state.clear()
+# --- ЗАПУСК БОТА ---
 
-    # --- Административные функции ---
-
-    async def add_balance_handler(self, message: Message):
-        """Добавление баланса пользователю (только для админа)"""
-        if message.from_user.id != ADMIN_ID:
-            return
-
-        try:
-            _, user_id_str, amount_str = message.text.split()
-            user_id = int(user_id_str)
-            amount = int(amount_str)
-
-            current_balance = self.db.get_user_balance(user_id)
-            new_balance = current_balance + amount
-            self.db.update_user_balance(user_id, new_balance)
-
-            await message.answer(f"✅ Пользователю {user_id} добавлен баланс: +{amount}. Новый баланс: {new_balance}")
-
-        except ValueError:
-             await message.answer("❌ Неверный формат. Используйте: `/add_balance [ID пользователя] [кол-во]`")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка при добавлении баланса: {e}")
-
-    async def stats_handler(self, message: Message):
-        """Вывод статистики (только для админа)"""
-        if message.from_user.id != ADMIN_ID:
-            return
-
-        total_users, total_generations, total_balance = self.db.get_all_users_stats()
-
-        stats_text = (
-            "📊 **Статистика Бота**\n"
-            "-----------------------------\n"
-            f"👤 Всего пользователей: `{total_users}`\n"
-            f"📸 Всего генераций: `{total_generations}`\n"
-            f"💰 Общий баланс (неиспользовано): `{total_balance}`"
-        )
-        await message.answer(stats_text, parse_mode="Markdown")
-
-    # --- Функции-заглушки для формирования промпта и сводки (нужны для завершения логики) ---
-    async def generate_summary(self, data: Dict[str, Any]) -> str:
-        """Генерирует сводку параметров из FSMContext."""
-        summary = ""
-        for key, value in data.items():
-             if key not in ['photo_file_id', 'temp_photo_path', 'prompt'] and value:
-                 # Если значение - Enum, берем его .value или .name
-                 display_value = value.value if hasattr(value, 'value') and isinstance(value.value, str) else value.name if hasattr(value, 'name') else str(value)
-                 summary += f"• **{key.capitalize()}**: {display_value}\n"
-        return summary or "Нет выбранных параметров (только фото)."
-
-    async def generate_prompt(self, data: Dict[str, Any]) -> str:
-        """Формирует финальный промпт для Gemini."""
-        gender = data.get('gender', GenderType.DISPLAY).value
-        location = data.get('location', 'Studio').value if hasattr(data.get('location'), 'value') else 'Studio'
-        height = data.get('height', '170')
-        age = data.get('age', '25')
-        size = data.get('size', '44')
-        style = data.get('location_style', LocationStyle.REGULAR).value if hasattr(data.get('location_style'), 'value') else 'regular style'
-        pose = data.get('pose', PoseType.STANDING).value if hasattr(data.get('pose'), 'value') else 'standing'
-        view = data.get('view', ViewType.FRONT).value if hasattr(data.get('view'), 'value') else 'front view'
-
-        if data.get('gender') == GenderType.DISPLAY:
-             return "Create a product display photo on a clean, light background with soft shadows. Focus on the clothing item, making it look professional and appealing for e-commerce."
-
-        # Формируем сложный промпт для inpainting/remixing
-        prompt = (
-            f"Replace the clothing item on the model in the provided image with the new item. "
-            f"The final image should show a {gender} model, {age} years old, wearing the new garment. "
-            f"Model characteristics: height {height} cm, clothes size {size}. "
-            f"Setting: **{location}** in a **{style}** atmosphere. "
-            f"Model Pose: **{pose}** with a **{view}**. "
-            "Ensure the garment fits naturally and realistically, maintaining high photo quality, realistic lighting, and professional photography style. Do not change the model's face or hair, only the clothing and background/setting according to the prompt."
-        )
-        return prompt
-
-# --- Запуск бота ---
 async def main():
     bot_instance = FashionBot(token=BOT_TOKEN)
-    logger.info("🚀 Бот запущен!")
-    # Здесь добавлен импорт для types для корректного запуска
+    logger.info("🤖 Бот запущен!")
+    # Запуск основного цикла обработки событий
     await bot_instance.dp.start_polling(bot_instance.bot)
 
 if __name__ == "__main__":
     try:
-        # Убедитесь, что для демо-режима есть заглушка ImageDraw
-        if GEMINI_DEMO_MODE:
-             try:
-                 from PIL import ImageDraw
-             except ImportError:
-                 logger.error("❌ Для демо-режима требуется установить Pillow: pip install Pillow")
-                 sys.exit(1)
-
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("👋 Бот остановлен вручную.")
-    except Exception as e:
-        logger.error(f"Критическая ошибка запуска бота: {e}")
