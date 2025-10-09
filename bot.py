@@ -24,7 +24,8 @@ from aiogram.utils.media_group import MediaGroupBuilder
 from google import genai
 from google.api_core import exceptions
 from google.genai import types
-from PIL import Image, ImageDraw # Используется для демо-режима и ПЕРЕСОХРАНЕНИЯ
+from PIL import Image, ImageDraw
+from io import BytesIO # Используем BytesIO как в документации
 import io
 
 # Загрузка переменных окружения
@@ -42,10 +43,6 @@ GEMINI_DEMO_MODE = False
 if not BOT_TOKEN:
     print("❌ BOT_TOKEN не установлен в .env файле")
     sys.exit(1)
-
-if not GEMINI_API_KEY:
-    print("❌ GEMINI_API_KEY не установлен в .env файле")
-    # sys.exit(1) # Закомментировано для возможности тестирования в демо-режиме
 
 # Настройка логирования
 logging.basicConfig(
@@ -84,6 +81,8 @@ def init_db():
     logger.info("✅ База данных инициализирована")
 
 init_db()
+
+# --- Константы (Enum) ---
 
 class GenderType(Enum):
     WOMEN = "женская"
@@ -136,6 +135,8 @@ class ProductCreationStates(StatesGroup):
     waiting_for_view = State()
     waiting_for_confirmation = State()
 
+# --- Класс Database ---
+
 class Database:
     def __init__(self):
         self.conn = sqlite3.connect('fashion_bot.db', check_same_thread=False)
@@ -187,17 +188,17 @@ class Database:
 
         return total_users, total_generations, total_balance
 
-# --- Функция вызова API Gemini (ИСПРАВЛЕНА для надежного извлечения) ---
+# --- Функция вызова API Gemini (Обновлена согласно документации) ---
 def call_nano_banana_api(
     input_image_path: str,
     prompt: str,
     extra_params: Dict[str, Any] = None
 ) -> bytes:
     """
-    Отправляет изображение и промпт в Gemini 2.5 Flash Image и извлекает байты.
+    Отправляет изображение и промпт в Gemini 2.5 Flash Image и возвращает байты изображения.
     """
     if GEMINI_DEMO_MODE:
-        # Использование ImageDraw для создания демо-изображения
+        # Код демо-режима
         img = Image.new('RGB', (1024, 1024), color=(73, 109, 137))
         d = ImageDraw.Draw(img)
         d.text((50, 50), "ДЕМО-РЕЖИМ. Промпт: " + prompt[:100] + "...", fill=(255, 255, 255))
@@ -210,6 +211,7 @@ def call_nano_banana_api(
 
     api_config = extra_params if extra_params is not None else {}
     if 'config' not in api_config:
+        # Указываем, что ждем текст И изображение
         api_config['config'] = {"response_modalities": ['TEXT', 'IMAGE']}
 
     try:
@@ -225,60 +227,40 @@ def call_nano_banana_api(
         logger.error(f"Неизвестная ошибка API Gemini: {e}")
         raise Exception(f"Неизвестная ошибка API Gemini: {e}")
 
-    # --- БЛОК ИЗВЛЕЧЕНИЯ ИЗОБРАЖЕНИЯ ---
+    # --- ИЗВЛЕЧЕНИЕ ИЗОБРАЖЕНИЯ (МЕТОД ИЗ ДОКУМЕНТАЦИИ) ---
 
     if not response.candidates:
         if hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason != types.BlockReason.BLOCK_REASON_UNSPECIFIED:
              raise Exception(f"Запрос заблокирован по причине: {response.prompt_feedback.block_reason.name}")
-        raise Exception("API не вернул кандидатов (candidates) и не указал причину блокировки.")
+        raise Exception("API не вернул кандидатов.")
 
     candidate = response.candidates[0]
 
-    # Надежный поиск части, содержащей inline_data.data (байты изображения)
-    image_part = None
+    output_image_bytes = None
+
+    # Итерируемся по частям контента
     for part in candidate.content.parts:
-        if hasattr(part, 'inline_data') and hasattr(part.inline_data, 'data'):
-            image_part = part
-            break
+        if part.inline_data is not None:
+            # Найдена часть с inline_data (изображение)
+            data_content = part.inline_data.data
 
-    if image_part is None:
+            if isinstance(data_content, str):
+                # Если Base64 строка, декодируем
+                output_image_bytes = base64.b64decode(data_content)
+            elif isinstance(data_content, bytes):
+                # Если сырые байты, берем их
+                output_image_bytes = data_content
+
+            logger.info(f"DEBUG: Successfully extracted bytes. Size: {len(output_image_bytes)} bytes.")
+            break # Прерываем, как только нашли изображение
+        elif part.text is not None:
+            logger.info(f"DEBUG: Text part received: {part.text[:50]}...")
+
+    if output_image_bytes is None or len(output_image_bytes) == 0:
         text_explanation = "\n".join([p.text for p in candidate.content.parts if hasattr(p, 'text') and p.text])
-        finish_reason = candidate.finish_reason.name if hasattr(candidate, 'finish_reason') else "UNKNOWN"
-
-        error_msg = f"API не вернул inline_data. Причина завершения: {finish_reason}. "
-        if text_explanation.strip():
-             error_msg += f"Модель вернула только текст: {text_explanation.strip()[:150]}..."
-
-        logger.error(f"Ошибка извлечения inline_data: {error_msg}")
+        error_msg = f"API не вернул inline_data. Модель вернула только текст: {text_explanation.strip()[:150]}..."
+        logger.error(error_msg)
         raise Exception(error_msg)
-
-    # --- Извлечение данных из найденной части ---
-    inline_data = image_part.inline_data
-    data_content = inline_data.data
-    mime_type = getattr(inline_data, 'mime_type', 'N/A')
-
-    logger.info(f"DEBUG: MIME Type from API: {mime_type}")
-    logger.info(f"DEBUG: Data content type: {type(data_content)}")
-
-    if isinstance(data_content, str):
-        # Если данные Base64
-        try:
-            output_image_bytes = base64.b64decode(data_content)
-        except Exception as e:
-            raise Exception(f"Ошибка декодирования Base64. Ошибка: {e}")
-
-    elif isinstance(data_content, bytes):
-        # Если данные - сырые байты
-        output_image_bytes = data_content
-
-    else:
-        raise Exception(f"Объект inline_data.data имеет неожиданный тип: {type(data_content)}. Ожидались str (Base64) или bytes.")
-
-    if len(output_image_bytes) == 0:
-        logger.error("--- DEBUG: API вернул пустые байты изображения (длина 0). ---")
-        raise Exception("API вернул пустые данные (длина 0).")
-
-    logger.info(f"DEBUG: Successfully extracted bytes. Size: {len(output_image_bytes)} bytes.")
 
     return output_image_bytes
 
@@ -548,7 +530,6 @@ class FashionBot:
         if gender != GenderType.DISPLAY:
             try:
                 media_group = MediaGroupBuilder()
-                # Предполагается, что файлы 'photo/example1.jpg' и 'photo/example2.jpg' существуют
                 photo1 = FSInputFile("photo/example1.jpg")
                 photo2 = FSInputFile("photo/example2.jpg")
                 media_group.add_photo(media=photo1)
@@ -610,7 +591,6 @@ class FashionBot:
         gender = data['gender']
 
         if gender == GenderType.DISPLAY:
-            # Для витринного фото сразу к подтверждению
             prompt = await self.generate_prompt(data)
             await state.update_data(prompt=prompt)
 
@@ -839,17 +819,17 @@ class FashionBot:
                 # 1. Генерируем изображение через Gemini API
                 processed_image_bytes = call_nano_banana_api(temp_photo_path, prompt)
 
-                # --- 💡 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Пересохранение через PIL ---
-                image_stream = io.BytesIO(processed_image_bytes)
+                # 2. Пересохранение через PIL для гарантии совместимости с Telegram
+                # Pillow открывает байты, полученные из call_nano_banana_api
+                image_stream = BytesIO(processed_image_bytes)
                 img = Image.open(image_stream)
 
-                output_stream = io.BytesIO()
-                # Принудительно сохраняем в JPEG с высоким качеством для лучшей совместимости с Telegram
+                output_stream = BytesIO()
+                # Сохраняем в JPEG, что обычно устраняет проблемы "IMAGE_PROCESS_FAILED"
                 img.save(output_stream, format='JPEG', quality=90)
                 final_image_bytes = output_stream.getvalue()
-                # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
-                # 2. Отправляем сгенерированное изображение
+                # 3. Отправляем сгенерированное изображение
                 generated_image = BufferedInputFile(final_image_bytes, filename="generated_fashion.jpg")
 
                 await callback.message.answer_photo(
@@ -892,6 +872,10 @@ class FashionBot:
 # --- ЗАПУСК БОТА ---
 
 async def main():
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN не установлен. Завершение работы.")
+        return
+
     bot_instance = FashionBot(token=BOT_TOKEN)
     logger.info("🤖 Бот запущен!")
     await bot_instance.dp.start_polling(bot_instance.bot)
