@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import sqlite3
@@ -7,16 +6,10 @@ import sys
 import tempfile
 import base64
 from enum import Enum
-from typing import Dict, Any, Tuple
+from typing import Dict, Any
 from dataclasses import dataclass
-import time
-import io
-import re
-
-# Импорт из dotenv для загрузки переменных окружения
 from dotenv import load_dotenv
 
-# Aiogram imports
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, FSInputFile, BufferedInputFile
 from aiogram.filters import Command, StateFilter
@@ -24,20 +17,17 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.media_group import MediaGroupBuilder
-from aiogram.exceptions import TelegramBadRequest
 
 # Gemini imports
 from google import genai
 from google.api_core import exceptions
-from google.genai import types
-from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
-
+from PIL import Image
+import io
 
 # Загрузка переменных окружения
 load_dotenv()
 
-# --- Конфигурация из .env ---
-
+# Конфигурация из .env
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@bnbslow")
@@ -47,27 +37,22 @@ if not BOT_TOKEN:
     print("❌ BOT_TOKEN не установлен в .env файле")
     sys.exit(1)
 
-GEMINI_DEMO_MODE = False
 if not GEMINI_API_KEY:
     print("❌ GEMINI_API_KEY не установлен в .env файле")
-    print("⚠️ Бот будет работать в ДЕМО-РЕЖИМЕ для генерации (заглушка).")
-    GEMINI_DEMO_MODE = True
-
-name = "FashionBot"
+    sys.exit(1)
 
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
-# --- Инициализация базы данных ---
-
+# Инициализация базы данных
 def init_db():
     conn = sqlite3.connect('fashion_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -77,7 +62,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS generations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,18 +72,16 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users (user_id)
         )
     ''')
-
+    
     conn.commit()
     conn.close()
     logger.info("✅ База данных инициализирована")
 
 init_db()
 
-# --- Константы и перечисления ---
-
 class GenderType(Enum):
     WOMEN = "женская"
-    MEN = "мужская"
+    MEN = "мужская" 
     KIDS = "детская"
     DISPLAY = "витринное фото"
 
@@ -119,7 +102,7 @@ class SizeType(Enum):
 
 class LocationStyle(Enum):
     NEW_YEAR = "Новогодняя атмосфера"
-    SUMMER = "Лето"
+    SUMMER = "Лето" 
     NATURE = "Природа"
     PARK_WINTER = "Парк (зима)"
     PARK_SUMMER = "Парк (лето)"
@@ -134,6 +117,7 @@ class ViewType(Enum):
     BACK = "Сзади"
     FRONT = "Передняя часть"
 
+# Состояния FSM
 class ProductCreationStates(StatesGroup):
     waiting_for_gender = State()
     waiting_for_photo = State()
@@ -146,52 +130,30 @@ class ProductCreationStates(StatesGroup):
     waiting_for_view = State()
     waiting_for_confirmation = State()
 
-# --- Класс для работы с БД (Без изменений) ---
-
 class Database:
     def __init__(self):
         self.conn = sqlite3.connect('fashion_bot.db', check_same_thread=False)
         self.cursor = self.conn.cursor()
 
-    def get_user_balance(self, user_id: int, username: str = None, full_name: str = None) -> int:
+    def get_user_balance(self, user_id: int) -> int:
         self.cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
         result = self.cursor.fetchone()
         if result:
-            self.cursor.execute(
-                'UPDATE users SET username = ?, full_name = ? WHERE user_id = ?',
-                (username, full_name, user_id)
-            )
-            self.conn.commit()
             return result[0]
         else:
             self.cursor.execute(
-                'INSERT INTO users (user_id, username, full_name, balance) VALUES (?, ?, ?, ?)',
-                (user_id, username, full_name, 0)
+                'INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)',
+                (user_id,)
             )
             self.conn.commit()
             return 0
 
-    def update_user_balance(self, user_id: int, new_balance: int):
+    def update_user_balance(self, user_id: int, balance: int):
         self.cursor.execute(
-            'UPDATE users SET balance = ? WHERE user_id = ?',
-            (new_balance, user_id)
+            'INSERT OR REPLACE INTO users (user_id, balance) VALUES (?, ?)',
+            (user_id, balance)
         )
         self.conn.commit()
-
-    def add_balance(self, user_id: int, amount: int):
-        self.cursor.execute(
-            'INSERT INTO users (user_id, balance) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET balance = balance + excluded.balance',
-            (user_id, amount)
-        )
-        self.conn.commit()
-
-    def deduct_balance(self, user_id: int, cost: int = 1):
-        current_balance = self.get_user_balance(user_id)
-        if current_balance < cost:
-            return False
-
-        self.update_user_balance(user_id, current_balance - cost)
-        return True
 
     def add_generation(self, user_id: int, prompt: str):
         self.cursor.execute(
@@ -200,133 +162,156 @@ class Database:
         )
         self.conn.commit()
 
-    def get_all_users_stats(self) -> Tuple[int, int, int]:
+    def get_user_generations_count(self, user_id: int) -> int:
+        self.cursor.execute(
+            'SELECT COUNT(*) FROM generations WHERE user_id = ?',
+            (user_id,)
+        )
+        return self.cursor.fetchone()[0]
+
+    def get_all_users_stats(self):
         self.cursor.execute('SELECT COUNT(*) FROM users')
         total_users = self.cursor.fetchone()[0]
-
+        
         self.cursor.execute('SELECT COUNT(*) FROM generations')
         total_generations = self.cursor.fetchone()[0]
-
+        
         self.cursor.execute('SELECT SUM(balance) FROM users')
         total_balance = self.cursor.fetchone()[0] or 0
-
+        
         return total_users, total_generations, total_balance
 
-# --- Функция вызова API Gemini (С обновленной диагностикой) ---
-
+# --- Функция вызова API Gemini ---
 def call_nano_banana_api(
-    input_image_path: str,
-    prompt: str,
+    input_image_path: str, 
+    prompt: str, 
     extra_params: Dict[str, Any] = None
 ) -> bytes:
     """
-    Отправляет изображение и промпт в Gemini 2.5 Flash Image и извлекает байты.
+    Отправляет изображение и промпт в Gemini 2.5 Flash Image (Nano Banana) 
+    и корректно извлекает бинарные данные из ответа.
     """
-    if GEMINI_DEMO_MODE:
-        img = Image.new('RGB', (1024, 1024), color=(73, 109, 137))
-        d = ImageDraw.Draw(img)
-        d.text((50, 50), "ДЕМО-РЕЖИМ. Промпт: " + prompt[:100] + "...", fill=(255, 255, 255))
-        img_byte_arr = io.BytesIO()
-        img.save(img_byte_arr, format='PNG')
-        return img_byte_arr.getvalue()
+    
+    # 1. Загрузка API Key и инициализация клиента
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        raise Exception(f"Ошибка инициализации Gemini клиента. Проверьте GEMINI_API_KEY в .env. Детали: {e}")
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    input_image = Image.open(input_image_path)
+    # 2. Чтение изображения с помощью Pillow
+    try:
+        input_image = Image.open(input_image_path)
+    except FileNotFoundError:
+        raise ValueError(f"Исходный файл не найден: {input_image_path}")
+    except Exception as e:
+        raise ValueError(f"Ошибка чтения изображения: {e}")
 
-    api_config = extra_params if extra_params is not None else {}
-    if 'config' not in api_config:
-        api_config['config'] = {"response_modalities": ['TEXT', 'IMAGE']}
+    logger.info(f"Отправка промпта '{prompt[:50]}...' и изображения в Gemini...")
 
+    # 3. Вызов модели Image-to-Image
+    config_params = extra_params if extra_params is not None else {}
+    
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash-image",
             contents=[prompt, input_image],
-            config=api_config.get('config')
+            **config_params
         )
-    except exceptions.ResourceExhausted as e:
-        raise Exception(f"Превышен лимит API (Resource Exhausted). Детали: {e}")
-    except exceptions.InternalServerError as e:
-        raise Exception(f"Внутренняя ошибка API Gemini. Детали: {e}")
-    except exceptions.GoogleAPICallError as e:
-        raise Exception(f"Ошибка вызова API Gemini: {e}")
+    except exceptions.PermissionDenied as e:
+        if "location is not supported" in str(e).lower():
+            raise Exception(
+                "❌ Сервис недоступен в вашем регионе. "
+                "Для использования Gemini API требуется VPN или настройка в поддерживаемом регионе."
+            )
+        else:
+            raise e
+    except exceptions.FailedPrecondition as e:
+        if "location is not supported" in str(e).lower():
+            raise Exception(
+                "❌ Сервис недоступен в вашем регионе. "
+                "Для использования Gemini API требуется VPN или настройка в поддерживаемом регионе."
+            )
+        else:
+            raise e
     except Exception as e:
-        raise Exception(f"Неизвестная ошибка API Gemini: {e}")
-
-    # 3. Корректная обработка и извлечение изображения
-
+        raise Exception(f"Ошибка API: {str(e)}")
+    
+    # 4. Корректная обработка и извлечение изображения
     if not response.candidates:
-        if hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason != types.BlockReason.BLOCK_REASON_UNSPECIFIED:
-             raise Exception(f"Запрос заблокирован по причине: {response.prompt_feedback.block_reason.name}")
-        raise Exception("API не вернул кандидатов (candidates) и не указал причину блокировки.")
+        raise Exception("API не вернул кандидатов (candidates).")
+    
+    if not response.candidates[0].content.parts:
+        raise Exception("API не вернул частей контента (parts).")
 
-    candidate = response.candidates[0]
+    first_part = response.candidates[0].content.parts[0]
 
-    image_part = next(
-        (p for p in candidate.content.parts if hasattr(p, 'inline_data') and hasattr(p.inline_data, 'data')),
-        None
-    )
+    # 1. Проверяем, что это не текстовый ответ (фильтры безопасности)
+    if not hasattr(first_part, 'inline_data'):
+        if hasattr(first_part, 'text'):
+            # Возвращаем текст ошибки, если Gemini отказался генерировать
+            raise Exception(f"Gemini вернул текст вместо изображения (отклонен фильтром?): {first_part.text}")
+        else:
+            raise Exception("Получен ответ неизвестной структуры.")
 
-    if image_part is None:
-        text_explanation = ""
-        for part in candidate.content.parts:
-            if hasattr(part, 'text'):
-                text_explanation += part.text + "\n"
+    # 2. Получаем объект InlineData
+    inline_data = first_part.inline_data
 
-        finish_reason = candidate.finish_reason.name if hasattr(candidate, 'finish_reason') else "UNKNOWN"
-
-        # Если модель остановилась не из-за 'STOP', это почти всегда проблема.
-        if finish_reason != types.FinishReason.STOP.name:
-            safety_info = ", ".join([f"{r.category.name}: {r.probability.name}" for r in candidate.safety_ratings])
-            error_msg = f"Генерация остановлена. Причина: {finish_reason}."
-            if text_explanation.strip():
-                error_msg += f" Текст: {text_explanation.strip()}."
-            error_msg += f" Safety: {safety_info}"
-            raise Exception(error_msg)
-
-        if text_explanation.strip():
-            # Если нет изображения, но есть текст (и причина STOP), модель могла выдать текст-заглушку.
-            raise Exception(f"Gemini вернул только текст, но не изображение: {text_explanation.strip()}")
-
-        raise Exception(f"Получен ответ с неизвестной структурой. Причина завершения: {finish_reason}.")
-
-    # 3.3. Если изображение найдено, извлекаем данные
-    inline_data = image_part.inline_data
-    data_content = inline_data.data
-    mime_type = getattr(inline_data, 'mime_type', 'N/A')
-
-    # 🌟 ЛОГИРОВАНИЕ ДЛЯ ДИАГНОСТИКИ СБОЯ 🌟
-    logger.info(f"DEBUG: MIME Type from API: {mime_type}")
-    logger.info(f"DEBUG: Data content type: {type(data_content)}")
-    # -------------------------------------
-
-    # ПРОВЕРКА: Если MIME-тип не похож на изображение
-    if not mime_type.lower().startswith("image/"):
-         raise Exception(f"Ожидалось изображение, но получен MIME-тип: {mime_type}. Возможно, модель вернула невалидный файл.")
-
-
-    if isinstance(data_content, str):
+    # 3. Извлекаем бинарные данные
+    # В большинстве случаев, данные находятся в атрибуте .data и закодированы в Base64.
+    if hasattr(inline_data, 'data') and isinstance(inline_data.data, str):
         try:
-            output_image_bytes = base64.b64decode(data_content)
+            # Декодируем строку Base64 в чистые байты
+            output_image_bytes = base64.b64decode(inline_data.data)
+            logger.info(f"✅ Успешно декодировано изображение из Base64, размер: {len(output_image_bytes)} байт")
         except Exception as e:
-            raise Exception(f"Ошибка декодирования Base64. Ошибка: {e}")
-
-    elif isinstance(data_content, bytes):
-        output_image_bytes = data_content
-
+            raise Exception(f"Ошибка декодирования Base64: {e}")
+    # Если данные уже являются байтами (менее частый случай, но для надежности)
+    elif hasattr(inline_data, 'data') and isinstance(inline_data.data, bytes):
+        output_image_bytes = inline_data.data
+        logger.info(f"✅ Успешно получены байты изображения, размер: {len(output_image_bytes)} байт")
     else:
-        raise Exception(f"Объект inline_data.data имеет неожиданный тип: {type(data_content)}. Ожидались str (Base64) или bytes.")
-
-    # 🌟 КРИТИЧЕСКАЯ ПРОВЕРКА: Размер байтов 🌟
-    if len(output_image_bytes) == 0:
-        logger.error("--- DEBUG: API вернул пустые байты изображения (длина 0). ---")
-        raise Exception("API вернул пустые данные (длина 0).")
-
-    logger.info(f"DEBUG: Successfully extracted bytes. Size: {len(output_image_bytes)} bytes.")
-    # -------------------------------------
+        # Если ни один из ожидаемых форматов не найден
+        raise Exception("Объект inline_data не содержит байтов изображения в ожидаемом формате (Base64/bytes).")
 
     return output_image_bytes
 
-# --- Главный класс бота и обработчики ---
+# Альтернативная функция для демонстрации (заглушка)
+def generate_demo_image(prompt: str) -> bytes:
+    """Генерирует демо-изображение когда Gemini недоступен"""
+    from PIL import Image, ImageDraw, ImageFont
+    import io
+    
+    # Создаем простое изображение с текстом
+    img = Image.new('RGB', (512, 512), color=(73, 109, 137))
+    d = ImageDraw.Draw(img)
+    
+    # Простой текст вместо изображения
+    text = "Демо-режим\n\nПромпт:\n" + prompt[:100] + "..."
+    
+    # Разбиваем текст на строки
+    lines = []
+    words = text.split()
+    line = ""
+    for word in words:
+        test_line = line + word + " "
+        if len(test_line) > 30:
+            lines.append(line)
+            line = word + " "
+        else:
+            line = test_line
+    if line:
+        lines.append(line)
+    
+    # Рисуем текст
+    y = 50
+    for line in lines:
+        d.text((50, y), line, fill=(255, 255, 255))
+        y += 30
+    
+    # Сохраняем в bytes
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='JPEG')
+    return img_byte_arr.getvalue()
 
 class FashionBot:
     def __init__(self, token: str):
@@ -336,483 +321,332 @@ class FashionBot:
         self.setup_handlers()
 
     def setup_handlers(self):
+        # Команда старт
         self.dp.message.register(self.start_handler, Command("start"))
-
-        self.dp.message.register(self.add_balance_handler, Command("add_balance"), F.from_user.id == ADMIN_ID)
-        self.dp.message.register(self.stats_handler, Command("stats"), F.from_user.id == ADMIN_ID)
-
+        
+        # Команды администратора
+        self.dp.message.register(self.add_balance_handler, Command("add_balance"))
+        self.dp.message.register(self.stats_handler, Command("stats"))
+        
+        # Основные обработчики
         self.dp.callback_query.register(self.accept_terms_handler, F.data == "accept_terms")
         self.dp.callback_query.register(self.support_handler, F.data == "support")
         self.dp.callback_query.register(self.create_photo_handler, F.data == "create_photo")
         self.dp.callback_query.register(self.topup_balance_handler, F.data == "topup_balance")
         self.dp.callback_query.register(self.back_to_main_handler, F.data == "back_to_main")
-
-        self.dp.callback_query.register(self.gender_select_handler, F.data.startswith("gender_"), StateFilter(None))
-        self.dp.message.register(self.photo_handler, StateFilter(ProductCreationStates.waiting_for_photo), F.photo)
-        self.dp.message.register(self.handle_wrong_photo_input, StateFilter(ProductCreationStates.waiting_for_photo))
+        
+        # Обработчики создания фото
+        self.dp.callback_query.register(self.gender_select_handler, F.data.startswith("gender_"))
+        self.dp.message.register(self.photo_handler, StateFilter(ProductCreationStates.waiting_for_photo))
         self.dp.message.register(self.height_handler, StateFilter(ProductCreationStates.waiting_for_height))
-        self.dp.callback_query.register(self.location_handler, F.data.startswith("location_"), StateFilter(ProductCreationStates.waiting_for_location))
-        self.dp.callback_query.register(self.age_handler, F.data.startswith("age_"), StateFilter(ProductCreationStates.waiting_for_age))
-        self.dp.callback_query.register(self.size_handler, F.data.startswith("size_"), StateFilter(ProductCreationStates.waiting_for_size))
-        self.dp.callback_query.register(self.location_style_handler, F.data.startswith("style_"), StateFilter(ProductCreationStates.waiting_for_location_style))
-        self.dp.callback_query.register(self.pose_handler, F.data.startswith("pose_"), StateFilter(ProductCreationStates.waiting_for_pose))
-        self.dp.callback_query.register(self.view_handler, F.data.startswith("view_"), StateFilter(ProductCreationStates.waiting_for_view))
-        self.dp.callback_query.register(self.confirmation_handler, F.data.startswith("confirm_"), StateFilter(ProductCreationStates.waiting_for_confirmation))
-
-
-    # --- Вспомогательные функции (Промпты обновлены) ---
-    async def generate_summary(self, data: Dict[str, Any]) -> str:
-        gender = data.get('gender')
-
-        summary = []
-        summary.append(f"Тип: **{gender.value}**")
-
-        if gender == GenderType.DISPLAY:
-            return "\n".join(summary)
-
-        summary.append(f"Рост: **{data.get('height', 'N/A')} см**")
-        summary.append(f"Локация: **{data.get('location', LocationType.STREET).value}**")
-        summary.append(f"Возраст: **{data.get('age', 'N/A')}**")
-        if data.get('size'):
-            summary.append(f"Размер: **{data.get('size', SizeType.SIZE_42_46).value}**")
-        summary.append(f"Стиль: **{data.get('location_style', LocationStyle.REGULAR).value}**")
-        summary.append(f"Поза: **{data.get('pose', PoseType.STANDING).value}**")
-        summary.append(f"Вид: **{data.get('view', ViewType.FRONT).value}**")
-
-        return "\n".join(summary)
-
-    async def generate_prompt(self, data: Dict[str, Any]) -> str:
-        gender = data.get('gender')
-
-        if gender == GenderType.DISPLAY:
-            # Усиленный промпт для витринного фото
-            return (
-                "**Product photography for e-commerce.** Replace the background of this product image with a stylish, modern, minimalist display zone, "
-                "like a smooth white floor or a light-colored wooden table. **Maintain the garment's texture and shape perfectly.** "
-                "Ensure the product is clearly the main subject. "
-                "Remove any distractions like shadows or wrinkles from the background. "
-                "The image must be **hyper-realistic, high-resolution**, and professionally lit. "
-                "**Crucially, do not add any human model or mannequin.**"
-            )
-
-        prompt = "Generate a hyper-realistic, high-quality professional fashion photo for e-commerce. "
-
-        gender_map = {
-            GenderType.WOMEN: "a realistic female model wearing the garment",
-            GenderType.MEN: "a realistic male model wearing the garment",
-            GenderType.KIDS: f"a realistic child model (age {data.get('age', '5')}) wearing the garment"
-        }
-
-        prompt += gender_map.get(gender, "a model wearing the garment") + ". "
-
-        if data.get('height'):
-            prompt += f"Model height: {data['height']}cm. "
-        if data.get('size'):
-            prompt += f"Model garment size: {data['size'].value}. "
-        if data.get('age') and gender != GenderType.KIDS:
-            prompt += f"Model appearance age: {data['age']}. "
-
-        prompt += f"Pose: {data.get('pose', PoseType.STANDING).value.lower()}. "
-        prompt += f"View: {data.get('view', ViewType.FRONT).value.lower()}. "
-
-        location = data.get('location', LocationType.STUDIO)
-        style = data.get('location_style', LocationStyle.REGULAR)
-
-        location_desc = {
-            LocationType.STREET: "Location: urban street photography style background, high-end commercial photo.",
-            LocationType.STUDIO: "Location: professional photo studio, solid light background, soft lighting.",
-            LocationType.FLOOR_ZONE: "Location: styled floor photo zone, flat lay composition or model sitting on the floor."
-        }.get(location, "Location: professional photo environment.")
-
-        prompt += location_desc + " "
-
-        style_desc = {
-            LocationStyle.NEW_YEAR: "Theme: luxury Christmas/New Year setting, festive decorations, warm lights.",
-            LocationStyle.SUMMER: "Theme: vibrant summer atmosphere, bright sunlight, beach or sunny city setting.",
-            LocationStyle.NATURE: "Theme: natural outdoor setting, green foliage, soft natural light.",
-            LocationStyle.PARK_WINTER: "Theme: winter park scene, soft snow, cold colors.",
-            LocationStyle.PARK_SUMMER: "Theme: lush green park, sunny day.",
-            LocationStyle.REGULAR: "Theme: neutral fashion theme.",
-            LocationStyle.CAR: "Theme: next to a luxury car, high-fashion editorial style."
-        }.get(style, "")
-
-        prompt += style_desc + " "
-
-        # Усиленный финальный блок промпта (ОБНОВЛЕН ДЛЯ БЕЗОПАСНОСТИ)
-        prompt += (
-            "Use the input image only as a reference for the garment and texture. The generated photo must look "
-            "like a real photograph taken by a professional fashion photographer. "
-            "Model's face must be **photorealistic and natural, with excellent detail**. "
-            "Ensure the model's anatomy is flawless. Perfect studio lighting, **shallow depth of field (bokeh)**. "
-            "Remove the background from the input image and perfectly integrate the garment onto the model. "
-            "Do not use cartoon, 3D render, or drawing styles. "
-            "The final image should be a single, stunning photograph."
-        )
-
-        return prompt.strip()
-
-    # --- Остальные обработчики команд и FSM (без изменений) ---
+        self.dp.callback_query.register(self.location_handler, F.data.startswith("location_"))
+        self.dp.callback_query.register(self.age_handler, F.data.startswith("age_"))
+        self.dp.callback_query.register(self.size_handler, F.data.startswith("size_"))
+        self.dp.callback_query.register(self.location_style_handler, F.data.startswith("style_"))
+        self.dp.callback_query.register(self.pose_handler, F.data.startswith("pose_"))
+        self.dp.callback_query.register(self.view_handler, F.data.startswith("view_"))
+        self.dp.callback_query.register(self.confirmation_handler, F.data.startswith("confirm_"))
 
     async def start_handler(self, message: Message):
-        self.db.get_user_balance(
-            message.from_user.id,
-            message.from_user.username,
-            message.from_user.full_name
-        )
-
+        """Обработчик команды /start"""
         welcome_text = (
-            "👋 Добро пожаловать в **Fashion AI Generator**!\n\n"
+            "👋 Добро пожаловать в Fashion AI Generator!\n\n"
             "Превращаем фотографии вашей одежды в профессиональные снимки на моделях.\n\n"
             "📋 Перед использованием ознакомьтесь с:\n"
-            "1. Условиями использования\n"
+            "1. Условиями использования\n"  
             "2. Согласием на обработку данных"
         )
-
+        
         builder = InlineKeyboardBuilder()
         builder.button(text="✅ Принять и продолжить", callback_data="accept_terms")
         builder.button(text="💬 Написать в поддержку", callback_data="support")
         builder.adjust(1)
-
-        await message.answer(welcome_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        
+        await message.answer(welcome_text, reply_markup=builder.as_markup())
 
     async def accept_terms_handler(self, callback: CallbackQuery):
+        """Обработчик принятия условий"""
         await callback.message.delete()
         await self.show_main_menu(callback.message)
 
     async def show_main_menu(self, message: Message):
-        user_id = message.from_user.id
-        current_balance = self.db.get_user_balance(user_id)
-
-        main_menu_text = (
-            f"🎯 Главное меню:\n\n"
-            f"Текущий баланс: **{current_balance} генераций**"
-        )
+        """Показать главное меню"""
+        main_menu_text = "🎯 Главное меню:"
         builder = InlineKeyboardBuilder()
         builder.button(text="📸 Создать фото", callback_data="create_photo")
         builder.button(text="💳 Пополнить баланс", callback_data="topup_balance")
         builder.button(text="🆘 Написать в поддержку", callback_data="support")
         builder.adjust(1)
+        
+        await message.answer(main_menu_text, reply_markup=builder.as_markup())
 
-        await message.answer(main_menu_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
-
-    async def back_to_main_handler(self, callback: CallbackQuery, state: FSMContext):
-        data = await state.get_data()
-        temp_photo_path = data.get('temp_photo_path')
-        if temp_photo_path and os.path.exists(temp_photo_path):
-            os.unlink(temp_photo_path)
-            logger.info(f"Удален временный файл: {temp_photo_path}")
-
-        await state.clear()
-
+    async def back_to_main_handler(self, callback: CallbackQuery):
+        """Обработчик возврата в главное меню"""
         await callback.message.delete()
         await self.show_main_menu(callback.message)
 
     async def support_handler(self, callback: CallbackQuery):
-        support_text = f"📞 Для связи с поддержкой напишите: **{SUPPORT_USERNAME}**"
+        """Обработчик связи с поддержкой"""
+        support_text = f"📞 Для связи с поддержкой напишите: {SUPPORT_USERNAME}"
         builder = InlineKeyboardBuilder()
         builder.button(text="🔙 Назад", callback_data="back_to_main")
-        await callback.message.answer(support_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        await callback.message.answer(support_text, reply_markup=builder.as_markup())
 
     async def topup_balance_handler(self, callback: CallbackQuery):
+        """Обработчик пополнения баланса"""
         user_id = callback.from_user.id
         current_balance = self.db.get_user_balance(user_id)
-
+        
         balance_text = (
             f"💳 Пополнение баланса\n\n"
-            f"Текущий баланс: **{current_balance} генераций**\n\n"
+            f"Текущий баланс: {current_balance} генераций\n\n"
             "Для пополнения баланса напишите нашему менеджеру:\n"
-            f"**{SUPPORT_USERNAME}**\n\n"
+            f"{SUPPORT_USERNAME}\n\n"
             f"Укажите ваш ID для зачисления: `{user_id}`"
         )
-
+        
         builder = InlineKeyboardBuilder()
-        builder.button(text="📞 Написать менеджеру", url=f"tg://resolve?domain={SUPPORT_USERNAME.lstrip('@')}")
+        builder.button(text="📞 Написать менеджеру", url=f"tg://resolve?domain={SUPPORT_USERNAME[1:]}")
         builder.button(text="🔙 Назад", callback_data="back_to_main")
         builder.adjust(1)
-
+        
         await callback.message.answer(balance_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
-    async def add_balance_handler(self, message: Message):
-        if message.from_user.id != ADMIN_ID:
-            return await message.answer("❌ У вас нет прав для выполнения этой команды.")
-
-        try:
-            # Используем regex для более надежного парсинга
-            match = re.match(r'/add_balance\s+(\d+)\s+(\d+)', message.text)
-            if not match:
-                raise ValueError("Неверный формат")
-
-            target_id = int(match.group(1))
-            amount = int(match.group(2))
-
-            if amount <= 0:
-                return await message.answer("❌ Сумма должна быть положительной.")
-
-            self.db.add_balance(target_id, amount)
-            new_balance = self.db.get_user_balance(target_id)
-
-            await message.answer(
-                f"✅ Баланс пользователя **{target_id}** пополнен на **{amount}** генераций. "
-                f"Новый баланс: **{new_balance}**.",
-                parse_mode="Markdown"
-            )
-
-            try:
-                await self.bot.send_message(
-                    target_id,
-                    f"🎉 Ваш баланс пополнен на **{amount}** генераций! Текущий баланс: **{new_balance}**.",
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                logger.warning(f"Не удалось уведомить пользователя {target_id}: {e}")
-
-        except ValueError:
-            await message.answer("❌ Неверный формат. Используйте: `/add_balance <user_id> <amount>`")
-        except Exception as e:
-            await message.answer(f"❌ Произошла ошибка: {e}")
-
-    async def stats_handler(self, message: Message):
-        if message.from_user.id != ADMIN_ID:
-            return await message.answer("❌ У вас нет прав для выполнения этой команды.")
-
-        try:
-            total_users, total_generations, total_balance = self.db.get_all_users_stats()
-
-            stats_text = (
-                "📊 **Статистика Бота** 📊\n\n"
-                f"👤 Всего пользователей: **{total_users}**\n"
-                f"🖼 Всего генераций: **{total_generations}**\n"
-                f"💰 Суммарный баланс: **{total_balance}** генераций"
-            )
-
-            await message.answer(stats_text, parse_mode="Markdown")
-
-        except Exception as e:
-            await message.answer(f"❌ Произошла ошибка при получении статистики: {e}")
-
-    # --- Логика FSM для создания фото ---
     async def create_photo_handler(self, callback: CallbackQuery):
+        """Обработчик начала создания фото"""
         user_id = callback.from_user.id
         current_balance = self.db.get_user_balance(user_id)
-
-        if current_balance <= 0 and ADMIN_ID != user_id:
+        
+        if current_balance <= 0:
             builder = InlineKeyboardBuilder()
             builder.button(text="💳 Пополнить баланс", callback_data="topup_balance")
             builder.button(text="🔙 Назад", callback_data="back_to_main")
             builder.adjust(1)
-
+            
             await callback.message.answer(
-                "❌ **Недостаточно генераций**. Пожалуйста, пополните баланс.",
-                reply_markup=builder.as_markup(),
-                parse_mode="Markdown"
+                "❌ Недостаточно генераций. Пожалуйста, пополните баланс.",
+                reply_markup=builder.as_markup()
             )
             return
 
         gender_text = "Выберите пожалуйста какой продукт вы хотите создать?"
         builder = InlineKeyboardBuilder()
         builder.button(text="👚 Женская одежда", callback_data="gender_women")
-        builder.button(text="👔 Мужская одежда", callback_data="gender_men")
+        builder.button(text="👔 Мужская одежда", callback_data="gender_men") 
         builder.button(text="👶 Детская одежда", callback_data="gender_kids")
-        builder.button(text="🖼 Витринное фото (без модели)", callback_data="gender_display")
+        builder.button(text="🖼️ Витринное фото", callback_data="gender_display")
         builder.button(text="🔙 Назад", callback_data="back_to_main")
         builder.adjust(1)
-
+        
         await callback.message.answer(gender_text, reply_markup=builder.as_markup())
 
     async def gender_select_handler(self, callback: CallbackQuery, state: FSMContext):
-        await callback.message.delete()
-
+        """Обработчик выбора пола/категории"""
         gender_map = {
             "gender_women": GenderType.WOMEN,
             "gender_men": GenderType.MEN,
             "gender_kids": GenderType.KIDS,
             "gender_display": GenderType.DISPLAY
         }
-
+        
         gender = gender_map[callback.data]
         await state.update_data(gender=gender)
-
+        
+        # Для витринного фото не показываем примеры
         if gender != GenderType.DISPLAY:
+            # Отправляем примеры фото
             try:
-                # ПРОВЕРКА: Убедитесь, что папка 'photo/' существует и содержит эти файлы!
+                media_group = MediaGroupBuilder()
                 photo1 = FSInputFile("photo/example1.jpg")
                 photo2 = FSInputFile("photo/example2.jpg")
-                media_group = MediaGroupBuilder()
-                media_group.add_photo(media=photo1, caption="Пример 1: Фотография товара, преобразованная в студийный снимок на модели.")
-                media_group.add_photo(media=photo2, caption="Пример 2: Фотография товара, преобразованная в уличный снимок на модели.")
+                media_group.add_photo(media=photo1)
+                media_group.add_photo(media=photo2)
                 await callback.message.answer_media_group(media=media_group.build())
             except Exception as e:
-                logger.warning(f"Не удалось загрузить или отправить примеры фото (Проверьте photo/example.jpg): {e}")
+                logger.warning(f"Не удалось загрузить примеры фото: {e}")
+                # Если фото нет, просто продолжаем
 
-
-        instruction_text = (
-            f"📸 Пожалуйста пришлите **фотографию вашего товара** для создания {gender.value.lower()}.\n\n"
-            "⚠️ **Требования к фото:** Товар должен быть четко виден, без лишних бликов и размытостей, "
-            "желательно на нейтральном фоне, без модели.\n\n"
-            f"Если остались вопросы - пишите в поддержку {SUPPORT_USERNAME}"
-        )
-
+        if gender == GenderType.DISPLAY:
+            instruction_text = (
+                "📸 Пожалуйста пришлите фотографию вашего товара для создания витринного фото.\n\n"
+                "⚠️ Обратите внимание: фотография вашего товара должна быть четко видна "
+                "без лишних бликов и размытостей.\n\n"
+                f"Если остались вопросы - пишите в поддержку {SUPPORT_USERNAME}"
+            )
+        else:
+            instruction_text = (
+                "📸 Пожалуйста пришлите фотографию вашего товара.\n\n"
+                "⚠️ Обратите внимание: фотография вашего товара должна быть четко видна "
+                "без лишних бликов и размытостей.\n\n"
+                f"Если остались вопросы - пишите в поддержку {SUPPORT_USERNAME}"
+            )
+        
         builder = InlineKeyboardBuilder()
         builder.button(text="🔙 Назад", callback_data="create_photo")
-
-        await callback.message.answer(instruction_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        
+        await callback.message.answer(instruction_text, reply_markup=builder.as_markup())
         await state.set_state(ProductCreationStates.waiting_for_photo)
 
-    async def handle_wrong_photo_input(self, message: Message):
-        await message.answer("❌ Пожалуйста, отправьте фотографию товара, а не текст или другой тип файла.")
-
     async def photo_handler(self, message: Message, state: FSMContext):
+        """Обработчик загрузки фото"""
+        if not message.photo:
+            await message.answer("📸 Пожалуйста, отправьте фотографию товара.")
+            return
+            
         photo_file_id = message.photo[-1].file_id
-
-        temp_path = None
+        await state.update_data(photo_file_id=photo_file_id)
+        
+        # Скачиваем фото для временного хранения
         try:
             file = await self.bot.get_file(photo_file_id)
             file_path = file.file_path
-
-            temp_file_name = f"temp_{message.from_user.id}_{int(time.time())}.jpg"
-            temp_path = os.path.join(tempfile.gettempdir(), temp_file_name)
-
-            # Скачивание файла во временную папку
+            
+            # Создаем временный файл
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+            temp_path = temp_file.name
+            temp_file.close()
+            
             await self.bot.download_file(file_path, temp_path)
             await state.update_data(temp_photo_path=temp_path)
-
+            
         except Exception as e:
             logger.error(f"Ошибка при сохранении фото: {e}")
             await message.answer("❌ Ошибка при обработке фото. Попробуйте еще раз.")
-            if temp_path and os.path.exists(temp_path):
-                os.unlink(temp_path)
             return
-
+        
         data = await state.get_data()
         gender = data['gender']
-
+        
         if gender == GenderType.DISPLAY:
-            # Пропускаем остальные шаги для витринного фото
-            final_prompt = await self.generate_prompt(data)
-            await state.update_data(prompt=final_prompt)
-
+            # Для витринного фото сразу переходим к подтверждению
+            prompt = await self.generate_prompt(data)
+            await state.update_data(prompt=prompt)
+            
+            user_id = message.from_user.id
+            self.db.add_generation(user_id, prompt)
+            
             summary = await self.generate_summary(data)
             summary_text = f"📋 Проверьте выбранные параметры:\n\n{summary}"
-
+            
             builder = InlineKeyboardBuilder()
-            builder.button(text="🚀 Начать генерацию (1 генерация)", callback_data="confirm_generate")
-            builder.button(text="❌ Отменить", callback_data="back_to_main")
+            builder.button(text="🚀 Начать генерацию", callback_data="confirm_generate")
+            builder.button(text="✏️ Внести изменения", callback_data="confirm_edit")
             builder.adjust(1)
-
-            await message.answer(summary_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+            
+            await message.answer(summary_text, reply_markup=builder.as_markup())
             await state.set_state(ProductCreationStates.waiting_for_confirmation)
         else:
             await state.set_state(ProductCreationStates.waiting_for_height)
-            await message.answer("📏 Напишите **рост модели** (в см):", parse_mode="Markdown")
+            await message.answer("📏 Напишите рост модели (в см):")
 
     async def height_handler(self, message: Message, state: FSMContext):
-        height_str = message.text.strip()
-        if not height_str.isdigit():
-            await message.answer("❌ Пожалуйста, введите **числовое значение роста** в см (например, 175):", parse_mode="Markdown")
+        """Обработчик ввода роста"""
+        height = message.text
+        if not height.isdigit():
+            await message.answer("❌ Пожалуйста, введите числовое значение роста в см:")
             return
-
-        height = int(height_str)
-        if not (50 <= height <= 220):
-            await message.answer("❌ Рост должен быть в диапазоне от 50 до 220 см. Попробуйте снова:")
-            return
-
+            
         await state.update_data(height=height)
         await state.set_state(ProductCreationStates.waiting_for_location)
-
+        
         builder = InlineKeyboardBuilder()
-        builder.button(text="🏙 Улица", callback_data="location_street")
-        builder.button(text="📸 Фотостудия", callback_data="location_studio")
+        builder.button(text="🏙️ Улица", callback_data="location_street")
+        builder.button(text="📸 Фотостудия", callback_data="location_studio") 
         builder.button(text="📐 Фотозона на полу", callback_data="location_floor")
         builder.adjust(1)
-
-        await message.answer("📍 Пожалуйста выберите **локацию**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
+        
+        await message.answer("📍 Пожалуйста выберите локацию:", reply_markup=builder.as_markup())
 
     async def location_handler(self, callback: CallbackQuery, state: FSMContext):
-        await callback.message.delete()
-
+        """Обработчик выбора локации"""
         location_map = {
             "location_street": LocationType.STREET,
             "location_studio": LocationType.STUDIO,
             "location_floor": LocationType.FLOOR_ZONE
         }
-
+        
         location = location_map[callback.data]
         await state.update_data(location=location)
-
+        
         data = await state.get_data()
         gender = data['gender']
-
+        
         builder = InlineKeyboardBuilder()
-
+        
         if gender == GenderType.KIDS:
             age_groups = AgeGroup.KIDS.value
         else:
             age_groups = AgeGroup.WOMEN_MEN.value
-
+            
         for age in age_groups:
             builder.button(text=age, callback_data=f"age_{age}")
-
+            
         builder.adjust(2)
-
-        await callback.message.answer("🎂 Пожалуйста выберите **возраст модели**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
+        
+        await callback.message.answer("🎂 Пожалуйста выберите возраст модели:", reply_markup=builder.as_markup())
         await state.set_state(ProductCreationStates.waiting_for_age)
 
     async def age_handler(self, callback: CallbackQuery, state: FSMContext):
-        await callback.message.delete()
-
+        """Обработчик выбора возраста"""
         age = callback.data.replace("age_", "")
         await state.update_data(age=age)
-
+        
         data = await state.get_data()
         gender = data['gender']
-
+        
         if gender == GenderType.KIDS:
-            await self.go_to_location_style(callback, state)
+            await state.set_state(ProductCreationStates.waiting_for_location_style)
+            
+            builder = InlineKeyboardBuilder()
+            builder.button(text="🎄 Новогодняя", callback_data="style_new_year")
+            builder.button(text="☀️ Лето", callback_data="style_summer")
+            builder.button(text="🌳 Природа", callback_data="style_nature")
+            builder.button(text="🏞️ Парк (зима)", callback_data="style_park_winter")
+            builder.button(text="🌲 Парк (лето)", callback_data="style_park_summer")
+            builder.button(text="🏢 Обычный", callback_data="style_regular")
+            builder.button(text="🚗 Рядом с машиной", callback_data="style_car")
+            builder.adjust(2)
+            
+            await callback.message.answer("🎨 Пожалуйста, выберите стиль локации:", reply_markup=builder.as_markup())
         else:
             await state.set_state(ProductCreationStates.waiting_for_size)
-
+            
             builder = InlineKeyboardBuilder()
-            builder.button(text=SizeType.SIZE_42_46.value, callback_data="size_42_46")
-            builder.button(text=SizeType.SIZE_50_54.value, callback_data="size_50_54")
-            builder.button(text=SizeType.SIZE_58_64.value, callback_data="size_58_64")
-            builder.button(text=SizeType.SIZE_64_68.value, callback_data="size_64_68")
+            builder.button(text="42-46", callback_data="size_42_46")
+            builder.button(text="50-54", callback_data="size_50_54")
+            builder.button(text="58-64", callback_data="size_58_64")
+            builder.button(text="64-68", callback_data="size_64_68")
             builder.adjust(2)
-
-            await callback.message.answer("📏 Пожалуйста выберите **размер одежды**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
+            
+            await callback.message.answer("📏 Пожалуйста выберите размер одежды:", reply_markup=builder.as_markup())
 
     async def size_handler(self, callback: CallbackQuery, state: FSMContext):
-        await callback.message.delete()
-
+        """Обработчик выбора размера"""
         size_map = {
             "size_42_46": SizeType.SIZE_42_46,
             "size_50_54": SizeType.SIZE_50_54,
             "size_58_64": SizeType.SIZE_58_64,
             "size_64_68": SizeType.SIZE_64_68
         }
-
+        
         size = size_map[callback.data]
         await state.update_data(size=size)
-
-        await self.go_to_location_style(callback, state)
-
-    async def go_to_location_style(self, callback: CallbackQuery, state: FSMContext):
         await state.set_state(ProductCreationStates.waiting_for_location_style)
-
+        
         builder = InlineKeyboardBuilder()
         builder.button(text="🎄 Новогодняя", callback_data="style_new_year")
         builder.button(text="☀️ Лето", callback_data="style_summer")
         builder.button(text="🌳 Природа", callback_data="style_nature")
-        builder.button(text="🏞 Парк (зима)", callback_data="style_park_winter")
+        builder.button(text="🏞️ Парк (зима)", callback_data="style_park_winter")
         builder.button(text="🌲 Парк (лето)", callback_data="style_park_summer")
-        builder.button(text="🏢 Обычный (студия/город)", callback_data="style_regular")
+        builder.button(text="🏢 Обычный", callback_data="style_regular")
         builder.button(text="🚗 Рядом с машиной", callback_data="style_car")
         builder.adjust(2)
-
-        await callback.message.answer("🎨 Пожалуйста, выберите **стиль локации**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
+        
+        await callback.message.answer("🎨 Пожалуйста, выберите стиль локации:", reply_markup=builder.as_markup())
 
     async def location_style_handler(self, callback: CallbackQuery, state: FSMContext):
-        await callback.message.delete()
-
+        """Обработчик выбора стиля локации"""
         style_map = {
             "style_new_year": LocationStyle.NEW_YEAR,
             "style_summer": LocationStyle.SUMMER,
@@ -822,212 +656,326 @@ class FashionBot:
             "style_regular": LocationStyle.REGULAR,
             "style_car": LocationStyle.CAR
         }
-
-        style = style_map[callback.data]
-        await state.update_data(location_style=style)
-
+        
+        location_style = style_map[callback.data]
+        await state.update_data(location_style=location_style)
         await state.set_state(ProductCreationStates.waiting_for_pose)
+        
         builder = InlineKeyboardBuilder()
-        builder.button(text=PoseType.SITTING.value, callback_data="pose_sitting")
-        builder.button(text=PoseType.STANDING.value, callback_data="pose_standing")
+        builder.button(text="🪑 Сидя", callback_data="pose_sitting")
+        builder.button(text="🧍 Стоя", callback_data="pose_standing")
         builder.adjust(2)
-
-        await callback.message.answer("💃 Пожалуйста, выберите **позу модели**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
+        
+        await callback.message.answer("🧘 Пожалуйста выберите положение тела:", reply_markup=builder.as_markup())
 
     async def pose_handler(self, callback: CallbackQuery, state: FSMContext):
-        await callback.message.delete()
-
+        """Обработчик выбора позы"""
         pose_map = {
             "pose_sitting": PoseType.SITTING,
             "pose_standing": PoseType.STANDING
         }
+        
         pose = pose_map[callback.data]
         await state.update_data(pose=pose)
-
         await state.set_state(ProductCreationStates.waiting_for_view)
+        
         builder = InlineKeyboardBuilder()
-        builder.button(text=ViewType.FRONT.value, callback_data="view_front")
-        builder.button(text=ViewType.BACK.value, callback_data="view_back")
+        builder.button(text="🔙 Сзади", callback_data="view_back")
+        builder.button(text="👤 Передняя часть", callback_data="view_front")
         builder.adjust(2)
-
-        await callback.message.answer("👀 Пожалуйста, выберите **вид** (передняя/задняя часть):", reply_markup=builder.as_markup(), parse_mode="Markdown")
+        
+        await callback.message.answer("👀 Пожалуйста выберите вид:", reply_markup=builder.as_markup())
 
     async def view_handler(self, callback: CallbackQuery, state: FSMContext):
-        await callback.message.delete()
-
+        """Обработчик выбора вида"""
         view_map = {
-            "view_front": ViewType.FRONT,
-            "view_back": ViewType.BACK
+            "view_back": ViewType.BACK,
+            "view_front": ViewType.FRONT
         }
+        
         view = view_map[callback.data]
         await state.update_data(view=view)
-
+        
+        # Формируем сводку
         data = await state.get_data()
-        final_prompt = await self.generate_prompt(data)
-        await state.update_data(prompt=final_prompt)
-
         summary = await self.generate_summary(data)
+        prompt = await self.generate_prompt(data)
+        
+        await state.update_data(prompt=prompt)
+        
+        user_id = callback.from_user.id
+        self.db.add_generation(user_id, prompt)
+        
         summary_text = f"📋 Проверьте выбранные параметры:\n\n{summary}"
-
+        
         builder = InlineKeyboardBuilder()
-        builder.button(text="🚀 Начать генерацию (1 генерация)", callback_data="confirm_generate")
-        builder.button(text="❌ Отменить", callback_data="back_to_main")
+        builder.button(text="🚀 Начать генерацию", callback_data="confirm_generate")
+        builder.button(text="✏️ Внести изменения", callback_data="confirm_edit")
         builder.adjust(1)
-
-        await callback.message.answer(summary_text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        
+        await callback.message.answer(summary_text, reply_markup=builder.as_markup())
         await state.set_state(ProductCreationStates.waiting_for_confirmation)
 
-
     async def confirmation_handler(self, callback: CallbackQuery, state: FSMContext):
-        """Обработчик подтверждения генерации (УЛУЧШЕННАЯ ОБРАБОТКА ОШИБОК И ДИАГНОСТИКА)"""
-        await callback.message.edit_reply_markup(reply_markup=None)
-
-        if callback.data != "confirm_generate":
-            return
-
+        """Обработчик подтверждения генерации"""
         user_id = callback.from_user.id
-        data = await state.get_data()
-        temp_photo_path = data.get('temp_photo_path')
-        final_prompt = data.get('prompt')
-
-        if not temp_photo_path or not final_prompt:
-            await state.clear()
-            return await callback.message.answer("❌ Ошибка: Недостаточно данных для генерации. Начните сначала.", reply_markup=InlineKeyboardBuilder().button(text="🔙 Назад", callback_data="back_to_main").as_markup())
-
-        # Списание баланса (только если это не Админ)
-        if user_id != ADMIN_ID and not self.db.deduct_balance(user_id, cost=1):
-            await state.clear()
-            return await callback.message.answer("❌ Недостаточно генераций. Пожалуйста, пополните баланс.", reply_markup=InlineKeyboardBuilder().button(text="💳 Пополнить", callback_data="topup_balance").as_markup())
-
-
-        sent_message = await callback.message.answer("⏳ **Генерация запущена...** Это может занять до 30 секунд.", parse_mode="Markdown")
-
-        output_image_bytes = None
-        generation_successful = False
-        balance_deducted = (user_id == ADMIN_ID) or True
-
-        try:
-            # 1. Вызов API
-            output_image_bytes = call_nano_banana_api(temp_photo_path, final_prompt)
-
-            # 🌟🌟🌟 ДИАГНОСТИЧЕСКИЙ БЛОК 🌟🌟🌟
-            if output_image_bytes is None:
-                raise ValueError("API вернул None вместо байтов.")
-
-            image_size = len(output_image_bytes)
-            # Принудительный вывод в ERROR log, чтобы увидеть его даже при минимальных настройках
-            logger.error(f"!!! DIAGNOSTIC !!! Image Bytes Size: {image_size} bytes")
-            # 🌟🌟🌟 КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА 🌟🌟🌟
-
-
-            # 2. Проверка целостности изображения (PIL)
-            image_stream = io.BytesIO(output_image_bytes)
-
-            # 🚨 Здесь происходит сбой UnidentifiedImageError (наш проблемный участок)
-            img = Image.open(image_stream)
-
-            # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительное пересохранение в PNG
-            temp_output = io.BytesIO()
-            img.save(temp_output, format='PNG')
-            output_image_bytes = temp_output.getvalue()
-
-            # 4. Успешная генерация
-            generation_successful = True
-            self.db.add_generation(user_id, final_prompt)
-
-            # 5. Отправка результата
-            result_photo = BufferedInputFile(output_image_bytes, filename="fashion_ai_result.png")
-
-            success_caption = (
-                f"✅ **Генерация завершена!**\n\n"
-                f"Текущий баланс: **{self.db.get_user_balance(user_id)}** генераций."
+        current_balance = self.db.get_user_balance(user_id)
+        
+        if callback.data == "confirm_generate":
+            if current_balance <= 0:
+                await callback.message.answer("❌ Недостаточно генераций. Пополните баланс.")
+                await state.clear()
+                return
+                
+            new_balance = current_balance - 1
+            self.db.update_user_balance(user_id, new_balance)
+            
+            data = await state.get_data()
+            prompt = data.get('prompt', '')
+            temp_photo_path = data.get('temp_photo_path')
+            
+            # Отправляем сообщение о начале генерации
+            generating_msg = await callback.message.answer(
+                f"🎨 Генерация изображения началась... Это может занять несколько секунд.\n\n"
+                f"Использовано 1 генерация\n"
+                f"Осталось генераций: {new_balance}"
             )
-
-            builder = InlineKeyboardBuilder()
-            builder.button(text="📸 Сделать еще фото", callback_data="create_photo")
-            builder.button(text="🔙 Главное меню", callback_data="back_to_main")
-            builder.adjust(1)
-
-            await self.bot.send_photo(
-                chat_id=callback.message.chat.id,
-                photo=result_photo,
-                caption=success_caption,
-                reply_markup=builder.as_markup(),
-                parse_mode="Markdown"
-            )
-
-        # Блок обработки ошибок
-        except (UnidentifiedImageError, exceptions.GoogleAPICallError, ValueError) as e:
-            # Ошибка PIL, Gemini API или ошибка декодирования/валидации
-
-            # Возврат баланса, если он был списан и генерация не удалась
-            if user_id != ADMIN_ID and balance_deducted and not generation_successful:
-                self.db.add_balance(user_id, 1)
-
-            error_details = str(e)
-
-            error_message = (
-                f"❌ **Ошибка генерации (Сбой API или формата)**\n\n"
-                f"Произошел сбой при обработке. Скорее всего, Gemini вернул поврежденный файл. Попробуйте другой входной товар или промпт.\n"
-                f"Детали ошибки (для разработчика): \n"
-                f"```\n{error_details[:300]}...\n```"
-            )
-
-            logger.error(f"Ошибка при генерации изображения: {e}", exc_info=True)
-
-            builder = InlineKeyboardBuilder()
-            builder.button(text="🔙 Назад", callback_data="back_to_main")
-            await callback.message.answer(error_message, reply_markup=builder.as_markup(), parse_mode="Markdown")
-
-        except Exception as e:
-            # Общая непредвиденная ошибка
-            if user_id != ADMIN_ID and balance_deducted and not generation_successful:
-                self.db.add_balance(user_id, 1)
-
-            error_details = str(e)
-
-            error_message = (
-                f"❌ **Непредвиденная ошибка**\n\n"
-                f"Произошла непредвиденная ошибка: \n"
-                f"```\n{error_details[:300]}...\n```"
-            )
-            logger.critical(f"КРИТИЧЕСКАЯ ОШИБКА БОТА: {e}", exc_info=True)
-
-            builder = InlineKeyboardBuilder()
-            builder.button(text="🔙 Назад", callback_data="back_to_main")
-            await callback.message.answer(error_message, reply_markup=builder.as_markup(), parse_mode="Markdown")
-
-        finally:
-            # Очистка
-            if temp_photo_path and os.path.exists(temp_photo_path):
-                os.unlink(temp_photo_path)
-
+            
             try:
-                await self.bot.delete_message(chat_id=sent_message.chat.id, message_id=sent_message.message_id)
-            except Exception:
-                pass
+                # Генерируем изображение через Gemini API
+                processed_image_bytes = call_nano_banana_api(temp_photo_path, prompt)
+                
+                # Отправляем сгенерированное изображение
+                generated_image = BufferedInputFile(processed_image_bytes, filename="generated_fashion.jpg")
+                
+                await callback.message.answer_photo(
+                    generated_image,
+                    caption="✨ Генерация завершена успешно!"
+                )
+                
+                # Удаляем временное сообщение
+                await generating_msg.delete()
+                
+            except Exception as e:
+                logger.error(f"Ошибка при генерации изображения: {e}")
+                await generating_msg.delete()
+                
+                error_msg = str(e)
+                if "location is not supported" in error_msg.lower():
+                    await callback.message.answer(
+                        "❌ Сервис генерации изображений недоступен в вашем регионе.\n\n"
+                        "Возможные решения:\n"
+                        "• Используйте VPN\n"
+                        "• Настройте Google Cloud проект в поддерживаемом регионе\n"
+                        "• Обратитесь к администратору\n\n"
+                        "Ваш баланс был возвращен."
+                    )
+                    # Возвращаем баланс
+                    self.db.update_user_balance(user_id, current_balance)
+                else:
+                    # Для других ошибок пробуем демо-режим
+                    try:
+                        await callback.message.answer("🔄 Пробуем демо-режим...")
+                        demo_image_bytes = generate_demo_image(prompt)
+                        demo_image = BufferedInputFile(demo_image_bytes, filename="demo_fashion.jpg")
+                        
+                        await callback.message.answer_photo(
+                            demo_image,
+                            caption=(
+                                "🔄 Демо-режим (Gemini API недоступен)\n\n"
+                                f"Ошибка: {error_msg}\n\n"
+                                "Обратитесь к администратору для настройки сервиса."
+                            )
+                        )
+                    except Exception as demo_error:
+                        await callback.message.answer(
+                            f"❌ Критическая ошибка:\n{error_msg}\n\n"
+                            f"Демо-режим также не сработал: {demo_error}\n\n"
+                            "Пожалуйста, обратитесь в поддержку."
+                        )
+                
+            finally:
+                # Удаляем временный файл
+                if temp_photo_path and os.path.exists(temp_photo_path):
+                    os.unlink(temp_photo_path)
+            
+        else:
+            # Внести изменения - начинаем заново
+            await self.create_photo_handler(callback)
+            
+        await state.clear()
 
-            await state.clear()
+    async def add_balance_handler(self, message: Message):
+        """Добавление баланса пользователю (только для админа)"""
+        if message.from_user.id != ADMIN_ID:
+            return
+            
+        try:
+            _, user_id_str, amount_str = message.text.split()
+            user_id = int(user_id_str)
+            amount = int(amount_str)
+            
+            current_balance = self.db.get_user_balance(user_id)
+            new_balance = current_balance + amount
+            self.db.update_user_balance(user_id, new_balance)
+            
+            await message.answer(f"✅ Пользователю {user_id} добавлено {amount} генераций. Всего: {new_balance}")
+            
+            try:
+                await self.bot.send_message(
+                    user_id, 
+                    f"🎉 Вам добавлено {amount} генераций!\n"
+                    f"Теперь у вас {new_balance} генераций."
+                )
+            except Exception as e:
+                await message.answer(f"⚠️ Не удалось отправить уведомление пользователю: {e}")
+            
+        except Exception as e:
+            await message.answer("❌ Использование: /add_balance <user_id> <amount>")
 
+    async def stats_handler(self, message: Message):
+        """Статистика (только для админа)"""
+        if message.from_user.id != ADMIN_ID:
+            return
+            
+        total_users, total_generations, total_balance = self.db.get_all_users_stats()
+        
+        stats_text = (
+            f"📊 Статистика бота:\n\n"
+            f"👥 Всего пользователей: {total_users}\n"
+            f"🔄 Всего генераций: {total_generations}\n"
+            f"💰 Общий баланс: {total_balance} генераций"
+        )
+        
+        await message.answer(stats_text)
 
-# --- Запуск бота ---
+    async def generate_summary(self, data: Dict[str, Any]) -> str:
+        """Генерация сводки выбранных параметров"""
+        gender_text = {
+            GenderType.WOMEN: "👚 Женская одежда",
+            GenderType.MEN: "👔 Мужская одежда", 
+            GenderType.KIDS: "👶 Детская одежда",
+            GenderType.DISPLAY: "🖼️ Витринное фото"
+        }
+        
+        if data['gender'] == GenderType.DISPLAY:
+            return "🖼️ Витринное фото: товар на белом фоне"
+        
+        summary = (
+            f"📦 Категория: {gender_text[data['gender']]}\n"
+            f"📏 Рост: {data['height']} см\n"
+            f"📍 Локация: {data['location'].value}\n"
+            f"🎂 Возраст: {data['age']} лет\n"
+        )
+        
+        if data['gender'] != GenderType.KIDS and 'size' in data:
+            summary += f"📏 Размер: {data['size'].value}\n"
+            
+        summary += (
+            f"🎨 Стиль локации: {data['location_style'].value}\n"
+            f"🧘 Положение: {data['pose'].value}\n"
+            f"👀 Вид: {data['view'].value}"
+        )
+        
+        return summary
+
+    async def generate_prompt(self, data: Dict[str, Any]) -> str:
+        """Генерация промта на английском"""
+        gender = data['gender']
+        
+        if gender == GenderType.DISPLAY:
+            return (
+                "Create a professional product display photo with pure white background. "
+                "The product should be perfectly centered in the frame, well-lit with soft studio lighting. "
+                "The image should be clean, crisp and high-resolution, suitable for e-commerce. "
+                "No shadows, no props, no text, just the product on white background. "
+                "The product must be an exact copy of the reference image provided."
+            )
+        
+        gender_map = {
+            GenderType.WOMEN: "woman",
+            GenderType.MEN: "man", 
+            GenderType.KIDS: "girl" if data['age'] in ["0.3-1", "2-4", "7-10"] else "boy"
+        }
+        
+        location_map = {
+            LocationType.STREET: "urban street",
+            LocationType.STUDIO: "professional photo studio",
+            LocationType.FLOOR_ZONE: "minimalist floor photo zone"
+        }
+        
+        view_map = {
+            ViewType.BACK: "back to camera, demonstrating the back of the product",
+            ViewType.FRONT: "facing camera"
+        }
+        
+        pose_map = {
+            PoseType.SITTING: "sitting",
+            PoseType.STANDING: "standing"
+        }
+        
+        season_map = {
+            LocationStyle.NEW_YEAR: "winter",
+            LocationStyle.SUMMER: "summer", 
+            LocationStyle.PARK_WINTER: "winter",
+            LocationStyle.PARK_SUMMER: "summer",
+            LocationStyle.REGULAR: "current season",
+            LocationStyle.CAR: "current season",
+            LocationStyle.NATURE: "spring"
+        }
+        
+        prompt_parts = [
+            f"Create a hyper-realistic, high-quality photo of a {gender_map[data['gender']]}",
+            f"wearing my product, exactly replicating the reference image I provide.",
+            f"The scene takes place at {location_map[data['location']]}.",
+            f"The model is {data['age']} years old, height {data['height']} cm,",
+        ]
+        
+        if data['gender'] != GenderType.KIDS and 'size' in data:
+            prompt_parts.append(f"with body type {data['size'].value}.")
+        else:
+            prompt_parts.append("with appropriate body type for the age.")
+        
+        prompt_parts.extend([
+            f"The photo should be taken from full-length view.",
+            f"The season is {season_map[data['location_style']]},",
+            f"and the model wears automatically selected footwear matching the style and weather.",
+            f"The outfit must be an exact 100% copy of my product from the reference image",
+            f"— do not create, modify, or add any details that are not visible.",
+            f"If the product has a central zipper, it must be fully closed.",
+            f"If there is no central zipper, do not include one.",
+            f"The {gender_map[data['gender']]} should pose like a professional model",
+            f"— expressive, confident, and natural, as in a real fashion photoshoot.",
+            f"The posture should highlight the clothing's shape and fit,",
+            f"but hands must never be in pockets.",
+            f"The model should be {pose_map[data['pose']]} and {view_map[data['view']]}.",
+            f"Lighting must look realistic and flattering,",
+            f"emphasizing the texture, material, and true color of the product.",
+            f"The background should complement the scene but never distract from the item.",
+            f"The final image should appear as a professional fashion editorial photo,",
+            f"photorealistic, clean, and perfectly balanced in composition and proportions."
+        ])
+        
+        return " ".join(prompt_parts)
+
+    async def run(self):
+        """Запуск бота"""
+        logger.info("🤖 Бот запускается...")
+        try:
+            await self.dp.start_polling(self.bot)
+        except Exception as e:
+            logger.error(f"❌ Ошибка при запуске бота: {e}")
+        finally:
+            await self.bot.session.close()
 
 async def main():
-    bot_instance = FashionBot(token=BOT_TOKEN)
-    logger.info("🤖 Бот запущен!")
-    await bot_instance.dp.start_polling(bot_instance.bot)
+    bot = FashionBot(BOT_TOKEN)
+    await bot.run()
 
 if __name__ == "__main__":
     try:
-        # Убедитесь, что папки существуют
-        if not os.path.exists(tempfile.gettempdir()):
-            os.makedirs(tempfile.gettempdir())
-
-        if not os.path.exists("photo"):
-             os.makedirs("photo")
-
-        # !!! ВАЖНО: Разместите ваши example1.jpg и example2.jpg в папке photo/ !!!
-
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Бот остановлен вручную.")
+    except KeyboardInterrupt:
+        logger.info("⏹️ Бот остановлен пользователем")
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка: {e}")
