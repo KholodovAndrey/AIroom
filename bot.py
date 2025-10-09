@@ -381,12 +381,12 @@ class FashionBot:
 
         if gender == GenderType.DISPLAY:
             return (
-                "Replace the background of this product image with a stylish, modern, minimalist display zone, "
-                "like a smooth white floor or a light-colored wooden table, focused on the product. "
+                "Product photography for e-commerce. Replace the background of this product image with a stylish, modern, minimalist display zone, "
+                "like a smooth white floor or a light-colored wooden table. Maintain the garment's texture and shape perfectly. "
                 "Ensure the product is clearly the main subject. "
                 "Remove any distractions like shadows or wrinkles from the background. "
-                "The image should be high-resolution and professionally lit for e-commerce. "
-                "Do not add any human model."
+                "The image must be hyper-realistic, high-resolution, and professionally lit. "
+                "Crucially, do not add any human model or mannequin." # Усиление
             )
 
         prompt = "Generate a hyper-realistic, high-quality professional fashion photo for e-commerce. "
