@@ -10,6 +10,8 @@ from enum import Enum
 from typing import Dict, Any, Tuple
 from dataclasses import dataclass
 import time
+import io
+import re
 
 # Импорт из dotenv для загрузки переменных окружения
 from dotenv import load_dotenv
@@ -29,7 +31,7 @@ from google import genai
 from google.api_core import exceptions
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
-import io
+
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -210,7 +212,7 @@ class Database:
 
         return total_users, total_generations, total_balance
 
-# --- Функция вызова API Gemini (КРИТИЧЕСКИЕ ИЗМЕНЕНИЯ И ОТЛАДКА) ---
+# --- Функция вызова API Gemini (С обновленной диагностикой) ---
 
 def call_nano_banana_api(
     input_image_path: str,
@@ -219,7 +221,6 @@ def call_nano_banana_api(
 ) -> bytes:
     """
     Отправляет изображение и промпт в Gemini 2.5 Flash Image и извлекает байты.
-    Добавлено подробное логирование для диагностики сбоев.
     """
     if GEMINI_DEMO_MODE:
         img = Image.new('RGB', (1024, 1024), color=(73, 109, 137))
@@ -230,7 +231,7 @@ def call_nano_banana_api(
         return img_byte_arr.getvalue()
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    input_image = Image.open(input_image_path) # Вынес за try/except, т.к. ошибка чтения - это ошибка входных данных, не API
+    input_image = Image.open(input_image_path)
 
     api_config = extra_params if extra_params is not None else {}
     if 'config' not in api_config:
@@ -325,7 +326,7 @@ def call_nano_banana_api(
 
     return output_image_bytes
 
-# --- Главный класс бота и обработчики (Промпты и подтверждение обновлены) ---
+# --- Главный класс бота и обработчики ---
 
 class FashionBot:
     def __init__(self, token: str):
@@ -335,7 +336,6 @@ class FashionBot:
         self.setup_handlers()
 
     def setup_handlers(self):
-        # ... (регистрация обработчиков - без изменений)
         self.dp.message.register(self.start_handler, Command("start"))
 
         self.dp.message.register(self.add_balance_handler, Command("add_balance"), F.from_user.id == ADMIN_ID)
@@ -438,12 +438,12 @@ class FashionBot:
 
         prompt += style_desc + " "
 
-        # Усиленный финальный блок промпта (для устранения неестественных лиц и общего улучшения качества)
+        # Усиленный финальный блок промпта (ОБНОВЛЕН ДЛЯ БЕЗОПАСНОСТИ)
         prompt += (
             "Use the input image only as a reference for the garment and texture. The generated photo must look "
             "like a real photograph taken by a professional fashion photographer. "
-            "Model's face must be **beautiful, natural, and realistic, avoiding any distortion**. "
-            "Natural skin, realistic hands, perfect lighting, **shallow depth of field (bokeh)**. "
+            "Model's face must be **photorealistic and natural, with excellent detail**. "
+            "Ensure the model's anatomy is flawless. Perfect studio lighting, **shallow depth of field (bokeh)**. "
             "Remove the background from the input image and perfectly integrate the garment onto the model. "
             "Do not use cartoon, 3D render, or drawing styles. "
             "The final image should be a single, stunning photograph."
@@ -451,7 +451,7 @@ class FashionBot:
 
         return prompt.strip()
 
-    # ... (Остальные обработчики команд и FSM - без изменений)
+    # --- Остальные обработчики команд и FSM (без изменений) ---
 
     async def start_handler(self, message: Message):
         self.db.get_user_balance(
@@ -537,9 +537,13 @@ class FashionBot:
             return await message.answer("❌ У вас нет прав для выполнения этой команды.")
 
         try:
-            _, target_id_str, amount_str = message.text.split()
-            target_id = int(target_id_str)
-            amount = int(amount_str)
+            # Используем regex для более надежного парсинга
+            match = re.match(r'/add_balance\s+(\d+)\s+(\d+)', message.text)
+            if not match:
+                raise ValueError("Неверный формат")
+
+            target_id = int(match.group(1))
+            amount = int(match.group(2))
 
             if amount <= 0:
                 return await message.answer("❌ Сумма должна быть положительной.")
@@ -875,7 +879,7 @@ class FashionBot:
 
 
     async def confirmation_handler(self, callback: CallbackQuery, state: FSMContext):
-        """Обработчик подтверждения генерации (УЛУЧШЕННАЯ ОБРАБОТКА ОШИБОК)"""
+        """Обработчик подтверждения генерации (УЛУЧШЕННАЯ ОБРАБОТКА ОШИБОК И ДИАГНОСТИКА)"""
         await callback.message.edit_reply_markup(reply_markup=None)
 
         if callback.data != "confirm_generate":
@@ -905,21 +909,22 @@ class FashionBot:
         try:
             # 1. Вызов API
             output_image_bytes = call_nano_banana_api(temp_photo_path, final_prompt)
-            
-            # --- НОВЫЙ ДИАГНОСТИЧЕСКИЙ БЛОК ---
-            if not output_image_bytes:
-                raise ValueError("API вернул пустой набор байтов.")
+
+            # 🌟🌟🌟 ДИАГНОСТИЧЕСКИЙ БЛОК 🌟🌟🌟
+            if output_image_bytes is None:
+                raise ValueError("API вернул None вместо байтов.")
 
             image_size = len(output_image_bytes)
             # Принудительный вывод в ERROR log, чтобы увидеть его даже при минимальных настройках
             logger.error(f"!!! DIAGNOSTIC !!! Image Bytes Size: {image_size} bytes")
-            # --- КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА ---
-            
+            # 🌟🌟🌟 КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА 🌟🌟🌟
+
+
             # 2. Проверка целостности изображения (PIL)
             image_stream = io.BytesIO(output_image_bytes)
-            
-            # 🚨 Здесь происходит сбой UnidentifiedImageError (строка 913)
-            img = Image.open(image_stream) 
+
+            # 🚨 Здесь происходит сбой UnidentifiedImageError (наш проблемный участок)
+            img = Image.open(image_stream)
 
             # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительное пересохранение в PNG
             temp_output = io.BytesIO()
@@ -963,8 +968,9 @@ class FashionBot:
 
             error_message = (
                 f"❌ **Ошибка генерации (Сбой API или формата)**\n\n"
-                f"Произошел сбой при обработке: \n"
-                f"```\n{error_details[:500]}...\n```"
+                f"Произошел сбой при обработке. Скорее всего, Gemini вернул поврежденный файл. Попробуйте другой входной товар или промпт.\n"
+                f"Детали ошибки (для разработчика): \n"
+                f"```\n{error_details[:300]}...\n```"
             )
 
             logger.error(f"Ошибка при генерации изображения: {e}", exc_info=True)
@@ -983,7 +989,7 @@ class FashionBot:
             error_message = (
                 f"❌ **Непредвиденная ошибка**\n\n"
                 f"Произошла непредвиденная ошибка: \n"
-                f"```\n{error_details[:500]}...\n```"
+                f"```\n{error_details[:300]}...\n```"
             )
             logger.critical(f"КРИТИЧЕСКАЯ ОШИБКА БОТА: {e}", exc_info=True)
 
@@ -1013,12 +1019,14 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        # Убедитесь, что папки существуют
         if not os.path.exists(tempfile.gettempdir()):
             os.makedirs(tempfile.gettempdir())
 
-        # Убедитесь, что папка 'photo' существует для примеров!
         if not os.path.exists("photo"):
              os.makedirs("photo")
+
+        # !!! ВАЖНО: Разместите ваши example1.jpg и example2.jpg в папке photo/ !!!
 
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
