@@ -4,16 +4,13 @@ import os
 from io import BytesIO
 from PIL import Image
 
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    ConversationHandler,
-)
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.types import Message
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from dotenv import load_dotenv
+
 from google import genai
 from google.genai.errors import APIError
 from google.genai.types import GenerateImagesResponse, Image as GenAIImage
@@ -22,46 +19,50 @@ from google.genai.types import GenerateImagesResponse, Image as GenAIImage
 load_dotenv()
 
 # --- Константы и Настройки ---
-TELEGRAM_BOT_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Модели
-GEMINI_ANALYSIS_MODEL = "gemini-2.5-flash"  # Для анализа и создания промпта (ваша "flash image")
-IMAGE_GENERATION_MODEL = "imagen-3.0-generate-002" # Для реальной генерации изображения
-
-# Состояния для ConversationHandler
-PHOTO, DESCRIPTION = range(2)
+GEMINI_ANALYSIS_MODEL = "gemini-2.5-flash"
+IMAGE_GENERATION_MODEL = "imagen-3.0-generate-002"
 
 # Включаем логирование
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
 )
-logger = logging.getLogger(__name__)
 
-# Инициализация Gemini/Imagen клиента
+# Инициализация Google AI клиента
 try:
     if not GEMINI_API_KEY:
         raise ValueError("Ключ GEMINI_API_KEY не найден.")
     client = genai.Client(api_key=GEMINI_API_KEY)
 except Exception as e:
-    logger.error(f"🚫 Ошибка инициализации клиента Google AI: {e}")
+    logging.error(f"🚫 Ошибка инициализации клиента Google AI: {e}")
     client = None
 
-# --- Шаг 1: Анализ фото и создание промпта с Gemini 2.5 Flash ---
+# --- FSM States (Состояния) ---
+class GenerationStates(StatesGroup):
+    """Определяем состояния для многошагового диалога."""
+    waiting_for_photo = State()
+    waiting_for_description = State()
+
+# Инициализация Router для обработки сообщений
+router = Router()
+
+# --- Основная логика Google AI (Функции остаются асинхронными) ---
 
 async def generate_enhanced_prompt(image_data: BytesIO, user_description: str) -> str:
-    """
-    Использует Gemini 2.5 Flash для анализа изображения и создания детализированного
-    английского промпта для модели Imagen.
-    """
+    """Использует Gemini 2.5 Flash для создания детализированного промпта."""
+
+    # Сбрасываем указатель и открываем PIL Image
     image_data.seek(0)
     image = Image.open(image_data)
 
     system_instruction = (
-        "Ты — эксперт по промпт-инжинирингу. Твоя задача — проанализировать "
-        "предоставленное изображение и объединить его визуальные характеристики (стиль, "
-        "композицию, освещение) с текстовым описанием пользователя. Верни единый, "
-        "высокодетализированный, английский промпт, подходящий для фотореалистичной генерации Imagen."
+        "Ты — эксперт по промпт-инжинирингу. Проанализируй изображение и "
+        "объедини его визуальные характеристики с текстовым описанием пользователя. "
+        "Верни единый, высокодетализированный, английский промпт, подходящий для генерации Imagen."
     )
 
     prompt = (
@@ -77,15 +78,9 @@ async def generate_enhanced_prompt(image_data: BytesIO, user_description: str) -
 
     return response.text.strip()
 
-# --- Шаг 2: Генерация изображения с Imagen ---
-
 async def generate_image_with_imagen(final_prompt: str, input_image_bytes: bytes) -> bytes:
-    """
-    Отправляет финальный промпт и исходное изображение в Imagen для генерации.
-    Возвращает байты сгенерированного изображения.
-    """
+    """Вызывает Imagen для генерации изображения."""
 
-    # Загружаем исходное изображение как GenAIImage для референса
     input_image = GenAIImage.from_bytes(data=input_image_bytes, mime_type='image/jpeg')
 
     response: GenerateImagesResponse = client.models.generate_images(
@@ -95,7 +90,7 @@ async def generate_image_with_imagen(final_prompt: str, input_image_bytes: bytes
             "number_of_images": 1,
             "output_mime_type": "image/jpeg",
             "aspect_ratio": "1:1",
-            "image": input_image # Использование исходного фото как визуального контекста/референса
+            "image": input_image # Использование исходного фото как визуального контекста
         }
     )
 
@@ -104,61 +99,76 @@ async def generate_image_with_imagen(final_prompt: str, input_image_bytes: bytes
 
     return response.generated_images[0].image.image_bytes
 
-# --- Обработчики Telegram ---
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начинает диалог и просит отправить фото."""
+# --- Обработчики Telegram (aiogram) ---
+
+@router.message(Command("start"))
+async def command_start_handler(message: Message, state: FSMContext) -> None:
+    """Обработка команды /start."""
     if not client:
-        await update.message.reply_text("❌ Ошибка: Клиент Google AI не инициализирован. Проверьте ваш API ключ.")
-        return ConversationHandler.END
+        await message.answer("❌ Ошибка: Клиент Google AI не инициализирован. Проверьте ваш API ключ.")
+        await state.clear()
+        return
 
-    await update.message.reply_text(
+    await message.answer(
         "👋 Привет! Я использую **Gemini 2.5 Flash** (анализ) и **Imagen** (генерация).\n"
         "Пожалуйста, **отправь мне фото** (референс)."
     )
-    context.user_data.clear()
-    return PHOTO
+    # Переводим пользователя в состояние ожидания фото
+    await state.set_state(GenerationStates.waiting_for_photo)
 
-async def receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+
+@router.message(GenerationStates.waiting_for_photo, F.photo)
+async def process_photo(message: Message, state: FSMContext, bot: Bot) -> None:
     """Получает фото и просит описание."""
-    if not update.message.photo:
-        await update.message.reply_text("Пожалуйста, отправь именно фото.")
-        return PHOTO
 
-    photo_file = update.message.photo[-1]
-    context.user_data['photo_file_id'] = photo_file.file_id
+    # Скачиваем файл в оперативную память
+    file_info = await bot.get_file(message.photo[-1].file_id)
+    photo_bytes_io = BytesIO()
+    await bot.download_file(file_info.file_path, photo_bytes_io)
 
-    await update.message.reply_text(
+    # Сохраняем байты в FSMContext
+    await state.update_data(original_image_bytes=photo_bytes_io.getvalue())
+
+    await message.answer(
         "✅ Фото получено! Теперь **напиши текстовое описание** (промпт) для генерации вариации."
     )
-    return DESCRIPTION
+    # Переводим пользователя в состояние ожидания описания
+    await state.set_state(GenerationStates.waiting_for_description)
 
-async def receive_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Завершает диалог: Анализ -> Генерация -> Отправка результата."""
-    user_description = update.message.text
-    await update.message.reply_text("⏳ Получаю фото. **Gemini 2.5 Flash** анализирует его и создает промпт...")
+@router.message(GenerationStates.waiting_for_photo, F.text)
+async def process_photo_invalid(message: Message) -> None:
+    """Обработка неверного ввода в состоянии ожидания фото."""
+    await message.answer("Пожалуйста, отправь именно фото.")
 
-    # 1. Получаем файл фото
-    photo_file_id = context.user_data['photo_file_id']
-    new_file = await context.bot.get_file(photo_file_id)
 
-    photo_bytes_io = BytesIO()
-    await new_file.download_to_memory(photo_bytes_io)
+@router.message(GenerationStates.waiting_for_description, F.text)
+async def process_description(message: Message, state: FSMContext) -> None:
+    """Получает описание, выполняет генерацию и отправляет результат."""
 
-    # Сохраняем байты для Imagen
-    original_image_bytes = photo_bytes_io.getvalue()
+    user_description = message.text
+    data = await state.get_data()
+    original_image_bytes = data.get("original_image_bytes")
+
+    if not original_image_bytes:
+        await message.answer("Ошибка: не удалось найти загруженное фото. Начните снова: /start")
+        await state.clear()
+        return
+
+    await message.answer("⏳ Отлично, описание принято. **Gemini 2.5 Flash** анализирует фото...")
 
     try:
-        # 2. Анализ и создание промпта с помощью Gemini
+        # 1. Анализ и создание промпта (Gemini 2.5 Flash)
+        photo_bytes_io = BytesIO(original_image_bytes)
         enhanced_prompt = await generate_enhanced_prompt(photo_bytes_io, user_description)
-        logger.info(f"Сгенерированный промпт: {enhanced_prompt}")
-        await update.message.reply_text(f"📝 Промпт создан! Начинаю генерацию с **Imagen**...")
 
-        # 3. Генерация изображения с помощью Imagen
+        await message.answer("📝 Промпт создан! Начинаю генерацию с **Imagen**...")
+
+        # 2. Генерация изображения (Imagen)
         generated_image_bytes = await generate_image_with_imagen(enhanced_prompt, original_image_bytes)
 
-        # 4. Отправляем изображение в Telegram
-        await update.message.reply_photo(
+        # 3. Отправляем изображение в Telegram
+        await message.answer_photo(
             photo=generated_image_bytes,
             caption=(
                 f"✨ **Результат генерации:**\n\n"
@@ -169,45 +179,39 @@ async def receive_description(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
     except APIError as e:
-        await update.message.reply_text(f"❌ Ошибка API Google AI: {e}. Проверьте ключ и лимиты.")
-        logger.error(f"API Error: {e}")
+        await message.answer(f"❌ Ошибка API Google AI: {e}. Проверьте ключ и лимиты.")
+        logging.error(f"API Error: {e}")
     except Exception as e:
-        await update.message.reply_text(f"❌ Произошла непредвиденная ошибка: {e}")
-        logger.error(f"General Error: {e}")
+        await message.answer(f"❌ Произошла непредвиденная ошибка: {e}")
+        logging.error(f"General Error: {e}")
     finally:
-        context.user_data.clear()
-        return ConversationHandler.END
+        # Завершаем диалог
+        await state.clear()
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Завершает диалог по команде /cancel."""
-    context.user_data.clear()
-    await update.message.reply_text('⛔️ Диалог отменен. Начать снова: /start')
-    return ConversationHandler.END
+@router.message(Command("cancel"))
+async def command_cancel_handler(message: Message, state: FSMContext) -> None:
+    """Обработка команды /cancel."""
+    await state.clear()
+    await message.answer("⛔️ Диалог отменен. Начать снова: /start")
 
+# --- Главная функция запуска ---
 
-# --- Главная функция ---
-
-def main():
-    """Запускает бота."""
-    if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
-        logger.error("🚫 Токен Telegram бота или ключ Gemini не найдены в .env.")
+async def main() -> None:
+    """Инициализация и запуск диспетчера aiogram."""
+    if not TELEGRAM_BOT_TOKEN:
+        logging.error("🚫 Токен Telegram бота не найден.")
         return
 
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    dp = Dispatcher()
+    dp.include_router(router)
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            PHOTO: [MessageHandler(filters.PHOTO & ~filters.COMMAND, receive_photo)],
-            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_description)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
+    logging.info("🚀 Бот запущен на aiogram! Готов к работе с Gemini и Imagen.")
 
-    application.add_handler(conv_handler)
-
-    logger.info("🚀 Бот запущен! Готов к работе с Gemini и Imagen.")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Запуск бота: dp.start_polling() блокирует выполнение и обрабатывает входящие апдейты
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    # Запускаем асинхронную функцию main
+    asyncio.run(main())
