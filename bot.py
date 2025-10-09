@@ -23,8 +23,8 @@ from aiogram.utils.media_group import MediaGroupBuilder
 # Gemini imports
 from google import genai
 from google.api_core import exceptions
-from google.genai import types # 💡 ИСПРАВЛЕНИЕ 1: Импортируем типы для проверки block_reason
-from PIL import Image, ImageDraw # 💡 ИСПРАВЛЕНИЕ 2: Импортируем ImageDraw для демо-режима
+from google.genai import types
+from PIL import Image, ImageDraw # Используется для демо-режима и ПЕРЕСОХРАНЕНИЯ
 import io
 
 # Загрузка переменных окружения
@@ -36,8 +36,8 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@bnbslow")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# 💡 ИСПРАВЛЕНИЕ 3: Определяем переменную демо-режима
-GEMINI_DEMO_MODE = False # Установите True для включения заглушки вместо реального API
+# Демо-режим
+GEMINI_DEMO_MODE = False
 
 if not BOT_TOKEN:
     print("❌ BOT_TOKEN не установлен в .env файле")
@@ -197,7 +197,7 @@ def call_nano_banana_api(
     Отправляет изображение и промпт в Gemini 2.5 Flash Image и извлекает байты.
     """
     if GEMINI_DEMO_MODE:
-        # 💡 Использование ImageDraw для создания демо-изображения
+        # Использование ImageDraw для создания демо-изображения
         img = Image.new('RGB', (1024, 1024), color=(73, 109, 137))
         d = ImageDraw.Draw(img)
         d.text((50, 50), "ДЕМО-РЕЖИМ. Промпт: " + prompt[:100] + "...", fill=(255, 255, 255))
@@ -225,17 +225,16 @@ def call_nano_banana_api(
         logger.error(f"Неизвестная ошибка API Gemini: {e}")
         raise Exception(f"Неизвестная ошибка API Gemini: {e}")
 
-    # --- ИСПРАВЛЕННЫЙ БЛОК ИЗВЛЕЧЕНИЯ ИЗОБРАЖЕНИЯ ---
+    # --- БЛОК ИЗВЛЕЧЕНИЯ ИЗОБРАЖЕНИЯ ---
 
     if not response.candidates:
-        # 💡 Использование types.BlockReason для корректного сравнения
         if hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason != types.BlockReason.BLOCK_REASON_UNSPECIFIED:
              raise Exception(f"Запрос заблокирован по причине: {response.prompt_feedback.block_reason.name}")
         raise Exception("API не вернул кандидатов (candidates) и не указал причину блокировки.")
 
     candidate = response.candidates[0]
 
-    # 💡 Надежный поиск части, содержащей inline_data.data (байты изображения)
+    # Надежный поиск части, содержащей inline_data.data (байты изображения)
     image_part = None
     for part in candidate.content.parts:
         if hasattr(part, 'inline_data') and hasattr(part.inline_data, 'data'):
@@ -243,7 +242,6 @@ def call_nano_banana_api(
             break
 
     if image_part is None:
-        # Если изображение не найдено, собираем весь текст для диагностики
         text_explanation = "\n".join([p.text for p in candidate.content.parts if hasattr(p, 'text') and p.text])
         finish_reason = candidate.finish_reason.name if hasattr(candidate, 'finish_reason') else "UNKNOWN"
 
@@ -319,7 +317,7 @@ class FashionBot:
         self.dp.callback_query.register(self.view_handler, F.data.startswith("view_"))
         self.dp.callback_query.register(self.confirmation_handler, F.data.startswith("confirm_"))
 
-    # --- РЕАЛИЗАЦИЯ НЕДОСТАЮЩИХ МЕТОДОВ ---
+    # --- МЕТОДЫ ГЕНЕРАЦИИ ПРОМПТА И СВОДКИ ---
 
     async def generate_prompt(self, data: Dict[str, Any]) -> str:
         """
@@ -327,7 +325,6 @@ class FashionBot:
         """
         gender = data.get('gender', GenderType.DISPLAY)
 
-        # Инструкция для витринного фото (без модели)
         if gender == GenderType.DISPLAY:
             base_prompt = (
                 "Create a professional, high-quality, product-focused photo suitable for "
@@ -338,9 +335,6 @@ class FashionBot:
             )
             return base_prompt
 
-        # Для фото с моделью
-
-        # Извлекаем параметры из FSM-контекста
         gender_text = gender.value
         height = data.get('height', '170')
         location = data.get('location', LocationType.STUDIO).value
@@ -350,15 +344,12 @@ class FashionBot:
         pose = data.get('pose', PoseType.STANDING).value
         view = data.get('view', ViewType.FRONT).value
 
-        # Составляем детали модели
         model_details = f"a professional, natural-looking model, {gender_text} clothing, height {height} cm, age range {age}"
         if size:
              model_details += f", wearing size {size}"
 
-        # Составляем детали сцены
         scene_details = f"in a {location} setting, with a {location_style} atmosphere. Pose: {pose}, View: {view}."
 
-        # Финальный промпт
         prompt = (
             f"Generate a hyper-realistic, high-definition (4k), professional fashion photograph. "
             f"The image must feature **{model_details}**. "
@@ -380,7 +371,6 @@ class FashionBot:
         gender = data.get('gender', GenderType.DISPLAY)
         summary_parts.append(f"📦 **Категория**: {gender.value.capitalize()}")
 
-        # Добавляем параметры только если это не витринное фото
         if gender != GenderType.DISPLAY:
             summary_parts.append(f"📏 **Рост модели**: {data.get('height', 'Не указан')} см")
             summary_parts.append(f"📍 **Локация**: {data.get('location', LocationType.STUDIO).value}")
@@ -394,6 +384,8 @@ class FashionBot:
             summary_parts.append(f"👀 **Вид**: {data.get('view', ViewType.FRONT).value}")
 
         return "\n".join(summary_parts)
+
+    # --- ОБРАБОТЧИКИ АДМИНИСТРАТОРА ---
 
     async def add_balance_handler(self, message: Message):
         """Обработчик команды /add_balance (Только для ADMIN_ID)"""
@@ -414,7 +406,6 @@ class FashionBot:
                 await message.answer("❌ Количество генераций должно быть положительным числом.")
                 return
 
-            # Получаем текущий баланс. get_user_balance также создаст пользователя, если он не существует.
             current_balance = self.db.get_user_balance(target_user_id)
             new_balance = current_balance + amount
             self.db.update_user_balance(target_user_id, new_balance)
@@ -447,7 +438,7 @@ class FashionBot:
         )
         await message.answer(stats_text, parse_mode="Markdown")
 
-    # --- ОСНОВНЫЕ ОБРАБОТЧИКИ (Оригинальные, без изменений) ---
+    # --- ОСНОВНЫЕ ОБРАБОТЧИКИ ---
 
     async def start_handler(self, message: Message):
         """Обработчик команды /start"""
@@ -554,12 +545,10 @@ class FashionBot:
         gender = gender_map[callback.data]
         await state.update_data(gender=gender)
 
-        # Для витринного фото не показываем примеры
         if gender != GenderType.DISPLAY:
-            # Отправляем примеры фото
             try:
-                # ❗ Здесь предполагается, что файлы 'photo/example1.jpg' и 'photo/example2.jpg' существуют
                 media_group = MediaGroupBuilder()
+                # Предполагается, что файлы 'photo/example1.jpg' и 'photo/example2.jpg' существуют
                 photo1 = FSInputFile("photo/example1.jpg")
                 photo2 = FSInputFile("photo/example2.jpg")
                 media_group.add_photo(media=photo1)
@@ -567,7 +556,6 @@ class FashionBot:
                 await callback.message.answer_media_group(media=media_group.build())
             except Exception as e:
                 logger.warning(f"Не удалось загрузить примеры фото: {e}")
-                # Если фото нет, просто продолжаем
 
         if gender == GenderType.DISPLAY:
             instruction_text = (
@@ -599,13 +587,11 @@ class FashionBot:
         photo_file_id = message.photo[-1].file_id
         await state.update_data(photo_file_id=photo_file_id)
 
-        # Скачиваем фото для временного хранения
         temp_path = None
         try:
             file = await self.bot.get_file(photo_file_id)
             file_path = file.file_path
 
-            # Создаем временный файл
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
             temp_path = temp_file.name
             temp_file.close()
@@ -616,7 +602,6 @@ class FashionBot:
         except Exception as e:
             logger.error(f"Ошибка при сохранении фото: {e}")
             await message.answer("❌ Ошибка при обработке фото. Попробуйте еще раз.")
-            # Удаляем временный файл, если он был создан
             if temp_path and os.path.exists(temp_path):
                  os.unlink(temp_path)
             return
@@ -625,7 +610,7 @@ class FashionBot:
         gender = data['gender']
 
         if gender == GenderType.DISPLAY:
-            # Для витринного фото сразу переходим к подтверждению
+            # Для витринного фото сразу к подтверждению
             prompt = await self.generate_prompt(data)
             await state.update_data(prompt=prompt)
 
@@ -803,7 +788,6 @@ class FashionBot:
         view = view_map[callback.data]
         await state.update_data(view=view)
 
-        # Формируем сводку и промпт
         data = await state.get_data()
         summary = await self.generate_summary(data)
         prompt = await self.generate_prompt(data)
@@ -830,24 +814,21 @@ class FashionBot:
 
         if callback.data == "confirm_generate":
 
-            # Проверка баланса (игнорируется в демо-режиме)
             if current_balance <= 0 and not GEMINI_DEMO_MODE:
                 await callback.message.answer("❌ Недостаточно генераций. Пополните баланс.")
                 await state.clear()
                 return
 
-            # Списываем 1 генерацию (игнорируется в демо-режиме)
             if not GEMINI_DEMO_MODE:
                 new_balance = current_balance - 1
                 self.db.update_user_balance(user_id, new_balance)
             else:
-                new_balance = current_balance # Баланс не списываем в демо
+                new_balance = current_balance
 
             data = await state.get_data()
             prompt = data.get('prompt', '')
             temp_photo_path = data.get('temp_photo_path')
 
-            # Отправляем сообщение о начале генерации
             generating_msg = await callback.message.answer(
                 f"🎨 Генерация изображения началась... Это может занять 10-20 секунд.\n\n"
                 f"Использовано 1 генерация ({'Демо-режим' if GEMINI_DEMO_MODE else 'Боевой режим'})\n"
@@ -855,18 +836,27 @@ class FashionBot:
             )
 
             try:
-                # Генерируем изображение через Gemini API
+                # 1. Генерируем изображение через Gemini API
                 processed_image_bytes = call_nano_banana_api(temp_photo_path, prompt)
 
-                # Отправляем сгенерированное изображение
-                generated_image = BufferedInputFile(processed_image_bytes, filename="generated_fashion.jpg")
+                # --- 💡 КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Пересохранение через PIL ---
+                image_stream = io.BytesIO(processed_image_bytes)
+                img = Image.open(image_stream)
+
+                output_stream = io.BytesIO()
+                # Принудительно сохраняем в JPEG с высоким качеством для лучшей совместимости с Telegram
+                img.save(output_stream, format='JPEG', quality=90)
+                final_image_bytes = output_stream.getvalue()
+                # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
+                # 2. Отправляем сгенерированное изображение
+                generated_image = BufferedInputFile(final_image_bytes, filename="generated_fashion.jpg")
 
                 await callback.message.answer_photo(
                     generated_image,
                     caption="✨ Генерация завершена успешно!"
                 )
 
-                # Удаляем временное сообщение
                 await generating_msg.delete()
 
             except Exception as e:
@@ -877,13 +867,8 @@ class FashionBot:
                 if "location is not supported" in error_msg.lower() and not GEMINI_DEMO_MODE:
                     await callback.message.answer(
                         "❌ Сервис генерации изображений недоступен в вашем регионе.\n\n"
-                        "Возможные решения:\n"
-                        "• Используйте VPN\n"
-                        "• Настройте Google Cloud проект в поддерживаемом регионе\n"
-                        "• Обратитесь к администратору\n\n"
                         "Ваш баланс был возвращен."
                     )
-                    # Возвращаем баланс только если это был боевой режим
                     self.db.update_user_balance(user_id, current_balance)
                 else:
                     await callback.message.answer(
@@ -891,7 +876,6 @@ class FashionBot:
                         f"`{error_msg}`\n\n"
                         f"Попробуйте изменить параметры или обратитесь в поддержку.\n"
                     )
-                    # Возвращаем баланс, если списание произошло (не демо-режим)
                     if not GEMINI_DEMO_MODE:
                         self.db.update_user_balance(user_id, current_balance)
 
@@ -902,7 +886,6 @@ class FashionBot:
                     os.unlink(temp_photo_path)
 
         elif callback.data == "confirm_edit":
-            # Возврат к началу, чтобы внести изменения
             await state.clear()
             await self.create_photo_handler(callback)
 
@@ -911,7 +894,6 @@ class FashionBot:
 async def main():
     bot_instance = FashionBot(token=BOT_TOKEN)
     logger.info("🤖 Бот запущен!")
-    # Запуск основного цикла обработки событий
     await bot_instance.dp.start_polling(bot_instance.bot)
 
 if __name__ == "__main__":
