@@ -905,12 +905,21 @@ class FashionBot:
         try:
             # 1. Вызов API
             output_image_bytes = call_nano_banana_api(temp_photo_path, final_prompt)
+            
+            # --- НОВЫЙ ДИАГНОСТИЧЕСКИЙ БЛОК ---
+            if not output_image_bytes:
+                raise ValueError("API вернул пустой набор байтов.")
 
+            image_size = len(output_image_bytes)
+            # Принудительный вывод в ERROR log, чтобы увидеть его даже при минимальных настройках
+            logger.error(f"!!! DIAGNOSTIC !!! Image Bytes Size: {image_size} bytes")
+            # --- КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА ---
+            
             # 2. Проверка целостности изображения (PIL)
             image_stream = io.BytesIO(output_image_bytes)
-
-            # 🚨 Здесь происходит сбой UnidentifiedImageError
-            img = Image.open(image_stream)
+            
+            # 🚨 Здесь происходит сбой UnidentifiedImageError (строка 913)
+            img = Image.open(image_stream) 
 
             # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительное пересохранение в PNG
             temp_output = io.BytesIO()
