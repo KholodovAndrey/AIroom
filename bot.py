@@ -184,175 +184,95 @@ class Database:
 
 # --- Функция вызова API Gemini ---
 def call_nano_banana_api(
-    input_image_path: str, 
-    prompt: str, 
+    input_image_path: str,
+    prompt: str,
     extra_params: Dict[str, Any] = None
 ) -> bytes:
     """
-    Отправляет изображение и промпт в Gemini 2.5 Flash Image (Nano Banana) 
-    и корректно извлекает бинарные данные из ответа.
+    Отправляет изображение и промпт в Gemini 2.5 Flash Image и извлекает байты.
     """
-    
-    # 1. Загрузка API Key и инициализация клиента
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        raise Exception(f"Ошибка инициализации Gemini клиента. Проверьте GEMINI_API_KEY в .env. Детали: {e}")
+    if GEMINI_DEMO_MODE:
+        # ... (Демо-режим остается без изменений)
+        img = Image.new('RGB', (1024, 1024), color=(73, 109, 137))
+        d = ImageDraw.Draw(img)
+        d.text((50, 50), "ДЕМО-РЕЖИМ. Промпт: " + prompt[:100] + "...", fill=(255, 255, 255))
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        return img_byte_arr.getvalue()
 
-    # 2. Чтение изображения с помощью Pillow
-    try:
-        input_image = Image.open(input_image_path)
-    except FileNotFoundError:
-        raise ValueError(f"Исходный файл не найден: {input_image_path}")
-    except Exception as e:
-        raise ValueError(f"Ошибка чтения изображения: {e}")
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    input_image = Image.open(input_image_path) 
 
-    logger.info(f"Отправка промпта '{prompt[:50]}...' и изображения в Gemini...")
+    api_config = extra_params if extra_params is not None else {}
+    if 'config' not in api_config:
+        api_config['config'] = {"response_modalities": ['TEXT', 'IMAGE']}
 
-    # 3. Вызов модели Image-to-Image
-    config_params = extra_params if extra_params is not None else {}
-    
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash-image",
             contents=[prompt, input_image],
-            **config_params
+            config=api_config.get('config')
         )
-    except exceptions.PermissionDenied as e:
-        if "location is not supported" in str(e).lower():
-            raise Exception(
-                "❌ Сервис недоступен в вашем регионе. "
-                "Для использования Gemini API требуется VPN или настройка в поддерживаемом регионе."
-            )
-        else:
-            raise e
-    except exceptions.FailedPrecondition as e:
-        if "location is not supported" in str(e).lower():
-            raise Exception(
-                "❌ Сервис недоступен в вашем регионе. "
-                "Для использования Gemini API требуется VPN или настройка в поддерживаемом регионе."
-            )
-        else:
-            raise e
+    except exceptions.GoogleAPICallError as e:
+        raise Exception(f"Ошибка вызова API Gemini: {e}")
     except Exception as e:
-        raise Exception(f"Ошибка API: {str(e)}")
+        raise Exception(f"Неизвестная ошибка API Gemini: {e}")
+
+    # --- ИЗМЕНЕННЫЙ БЛОК ИЗВЛЕЧЕНИЯ ИЗОБРАЖЕНИЯ ---
     
-    # 4. Детальное логирование структуры ответа
-    logger.info("=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ОБ ОТВЕТЕ GEMINI ===")
-    logger.info(f"Количество кандидатов: {len(response.candidates) if response.candidates else 0}")
-    
-    if response.candidates:
-        for i, candidate in enumerate(response.candidates):
-            logger.info(f"Кандидат {i}:")
-            logger.info(f"  Финиш-причина: {getattr(candidate, 'finish_reason', 'N/A')}")
-            logger.info(f"  Рейтинг безопасности: {getattr(candidate, 'safety_ratings', 'N/A')}")
-            
-            if hasattr(candidate, 'content') and candidate.content:
-                logger.info(f"  Количество частей контента: {len(candidate.content.parts) if candidate.content.parts else 0}")
-                
-                if candidate.content.parts:
-                    for j, part in enumerate(candidate.content.parts):
-                        logger.info(f"  Часть {j}:")
-                        logger.info(f"    Тип: {type(part)}")
-                        logger.info(f"    Атрибуты: {dir(part)}")
-                        
-                        # Логируем все атрибуты части
-                        for attr in dir(part):
-                            if not attr.startswith('_'):
-                                try:
-                                    value = getattr(part, attr)
-                                    if not callable(value):
-                                        logger.info(f"    {attr}: {type(value)} = {str(value)[:200]}...")
-                                except Exception as attr_e:
-                                    logger.info(f"    {attr}: ОШИБКА получения - {attr_e}")
-            else:
-                logger.info("  Контент отсутствует или пуст")
-    else:
-        logger.info("Кандидаты отсутствуют в ответе")
-    
-    logger.info("=== КОНЕЦ ДЕТАЛЬНОЙ ИНФОРМАЦИИ ===")
-    
-    # 5. Корректная обработка и извлечение изображения
     if not response.candidates:
-        raise Exception("API не вернул кандидатов (candidates).")
+        if hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason != types.BlockReason.BLOCK_REASON_UNSPECIFIED:
+             raise Exception(f"Запрос заблокирован по причине: {response.prompt_feedback.block_reason.name}")
+        raise Exception("API не вернул кандидатов (candidates) и не указал причину блокировки.")
+
+    candidate = response.candidates[0]
     
-    if not response.candidates[0].content.parts:
-        raise Exception("API не вернул частей контента (parts).")
-
-    first_part = response.candidates[0].content.parts[0]
-
-    # 1. Проверяем, что это не текстовый ответ (фильтры безопасности)
-    if not hasattr(first_part, 'inline_data'):
-        if hasattr(first_part, 'text'):
-            # Возвращаем текст ошибки, если Gemini отказался генерировать
-            raise Exception(f"Gemini вернул текст вместо изображения (отклонен фильтром?): {first_part.text}")
-        else:
-            # Детальное логирование структуры части
-            logger.error("Неизвестная структура части контента:")
-            for attr in dir(first_part):
-                if not attr.startswith('_'):
-                    try:
-                        value = getattr(first_part, attr)
-                        if not callable(value):
-                            logger.error(f"  {attr}: {type(value)} = {str(value)[:500]}")
-                    except Exception as attr_e:
-                        logger.error(f"  {attr}: ОШИБКА получения - {attr_e}")
-            raise Exception("Получен ответ неизвестной структуры.")
-
-    # 2. Получаем объект InlineData
-    inline_data = first_part.inline_data
-    logger.info(f"Объект inline_data: {type(inline_data)}")
-    logger.info(f"Атрибуты inline_data: {[attr for attr in dir(inline_data) if not attr.startswith('_')]}")
-
-    # 3. Извлекаем бинарные данные
-    output_image_bytes = None
-    
-    # Проверяем все возможные атрибуты, где могут быть данные
-    for attr_name in ['data', 'image', 'bytes', 'content', 'blob']:
-        if hasattr(inline_data, attr_name):
-            attr_value = getattr(inline_data, attr_name)
-            logger.info(f"Найден атрибут {attr_name}: {type(attr_value)}")
+    # 💡 НОВЫЙ ПОДХОД: Ищем часть, содержащую inline_data.data (сами байты изображения)
+    image_part = None
+    for part in candidate.content.parts:
+        if hasattr(part, 'inline_data') and hasattr(part.inline_data, 'data'):
+            image_part = part
+            break
             
-            if isinstance(attr_value, str):
-                try:
-                    # Пробуем декодировать как Base64
-                    output_image_bytes = base64.b64decode(attr_value)
-                    logger.info(f"✅ Успешно декодировано из Base64 из атрибута {attr_name}, размер: {len(output_image_bytes)} байт")
-                    break
-                except Exception as e:
-                    logger.warning(f"Не удалось декодировать {attr_name} как Base64: {e}")
-            
-            elif isinstance(attr_value, bytes):
-                output_image_bytes = attr_value
-                logger.info(f"✅ Успешно получены байты из атрибута {attr_name}, размер: {len(output_image_bytes)} байт")
-                break
-            
-            elif hasattr(attr_value, 'getvalue'):
-                # Если это объект с методом getvalue (например, BytesIO)
-                try:
-                    output_image_bytes = attr_value.getvalue()
-                    logger.info(f"✅ Успешно получены байты через getvalue() из атрибута {attr_name}, размер: {len(output_image_bytes)} байт")
-                    break
-                except Exception as e:
-                    logger.warning(f"Ошибка при вызове getvalue() для {attr_name}: {e}")
-            
-            else:
-                logger.info(f"Атрибут {attr_name} имеет неподдерживаемый тип: {type(attr_value)}")
-
-    if output_image_bytes is None:
-        # Если ни один из методов не сработал, логируем все атрибуты для отладки
-        logger.error("Не удалось извлечь данные изображения. Все атрибуты inline_data:")
-        for attr in dir(inline_data):
-            if not attr.startswith('_'):
-                try:
-                    value = getattr(inline_data, attr)
-                    if not callable(value):
-                        logger.error(f"  {attr}: {type(value)} = {str(value)[:200]}...")
-                except Exception as attr_e:
-                    logger.error(f"  {attr}: ОШИБКА получения - {attr_e}")
+    if image_part is None:
+        # Если изображение не найдено, собираем весь текст для диагностики
+        text_explanation = "\n".join([p.text for p in candidate.content.parts if hasattr(p, 'text') and p.text])
+        finish_reason = candidate.finish_reason.name if hasattr(candidate, 'finish_reason') else "UNKNOWN"
         
-        raise Exception("Объект inline_data не содержит байтов изображения в ожидаемом формате.")
+        error_msg = f"API не вернул inline_data. Причина завершения: {finish_reason}. "
+        if text_explanation.strip():
+             error_msg += f"Модель вернула только текст: {text_explanation.strip()[:150]}..."
+        
+        raise Exception(error_msg)
+            
+    # --- Извлечение данных из найденной части ---
+    inline_data = image_part.inline_data 
+    data_content = inline_data.data
+    mime_type = getattr(inline_data, 'mime_type', 'N/A')
+    
+    logger.info(f"DEBUG: MIME Type from API: {mime_type}")
+    logger.info(f"DEBUG: Data content type: {type(data_content)}")
 
+    if isinstance(data_content, str):
+        # Если данные Base64
+        try:
+            output_image_bytes = base64.b64decode(data_content)
+        except Exception as e:
+            raise Exception(f"Ошибка декодирования Base64. Ошибка: {e}")
+
+    elif isinstance(data_content, bytes):
+        # Если данные - сырые байты (как в вашем логе)
+        output_image_bytes = data_content
+
+    else:
+        raise Exception(f"Объект inline_data.data имеет неожиданный тип: {type(data_content)}. Ожидались str (Base64) или bytes.")
+
+    if len(output_image_bytes) == 0:
+        logger.error("--- DEBUG: API вернул пустые байты изображения (длина 0). ---")
+        raise Exception("API вернул пустые данные (длина 0).")
+        
+    logger.info(f"DEBUG: Successfully extracted bytes. Size: {len(output_image_bytes)} bytes.")
+    
     return output_image_bytes
 
 # Альтернативная функция для демонстрации (заглушка)
