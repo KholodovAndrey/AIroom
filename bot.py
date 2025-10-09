@@ -144,7 +144,7 @@ class ProductCreationStates(StatesGroup):
     waiting_for_view = State()
     waiting_for_confirmation = State()
 
-# --- Класс для работы с БД ---
+# --- Класс для работы с БД (Без изменений) ---
 
 class Database:
     def __init__(self):
@@ -210,7 +210,7 @@ class Database:
 
         return total_users, total_generations, total_balance
 
-# --- Функция вызова API Gemini (ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ и ОТЛАДКА) ---
+# --- Функция вызова API Gemini (КРИТИЧЕСКИЕ ИЗМЕНЕНИЯ И ОТЛАДКА) ---
 
 def call_nano_banana_api(
     input_image_path: str,
@@ -219,6 +219,7 @@ def call_nano_banana_api(
 ) -> bytes:
     """
     Отправляет изображение и промпт в Gemini 2.5 Flash Image и извлекает байты.
+    Добавлено подробное логирование для диагностики сбоев.
     """
     if GEMINI_DEMO_MODE:
         img = Image.new('RGB', (1024, 1024), color=(73, 109, 137))
@@ -229,18 +230,11 @@ def call_nano_banana_api(
         return img_byte_arr.getvalue()
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-
-    try:
-        input_image = Image.open(input_image_path)
-    except Exception as e:
-        raise ValueError(f"Ошибка чтения исходного изображения: {e}")
+    input_image = Image.open(input_image_path) # Вынес за try/except, т.к. ошибка чтения - это ошибка входных данных, не API
 
     api_config = extra_params if extra_params is not None else {}
-
     if 'config' not in api_config:
-        api_config['config'] = {
-            "response_modalities": ['TEXT', 'IMAGE']
-        }
+        api_config['config'] = {"response_modalities": ['TEXT', 'IMAGE']}
 
     try:
         response = client.models.generate_content(
@@ -260,25 +254,18 @@ def call_nano_banana_api(
     # 3. Корректная обработка и извлечение изображения
 
     if not response.candidates:
-        # Если нет кандидатов, проверяем, нет ли ошибки на уровне ответа.
         if hasattr(response, 'prompt_feedback') and response.prompt_feedback.block_reason != types.BlockReason.BLOCK_REASON_UNSPECIFIED:
              raise Exception(f"Запрос заблокирован по причине: {response.prompt_feedback.block_reason.name}")
-
         raise Exception("API не вернул кандидатов (candidates) и не указал причину блокировки.")
 
     candidate = response.candidates[0]
 
-    # 3.1. Ищем часть, которая содержит Изображение (inline_data с байтами 'data')
     image_part = next(
-        (
-            p for p in candidate.content.parts
-            if hasattr(p, 'inline_data') and hasattr(p.inline_data, 'data')
-        ),
+        (p for p in candidate.content.parts if hasattr(p, 'inline_data') and hasattr(p.inline_data, 'data')),
         None
     )
 
     if image_part is None:
-        # 3.2. Если изображение не найдено, ищем Текстовое объяснение (ошибка/блокировка)
         text_explanation = ""
         for part in candidate.content.parts:
             if hasattr(part, 'text'):
@@ -289,12 +276,10 @@ def call_nano_banana_api(
         # Если модель остановилась не из-за 'STOP', это почти всегда проблема.
         if finish_reason != types.FinishReason.STOP.name:
             safety_info = ", ".join([f"{r.category.name}: {r.probability.name}" for r in candidate.safety_ratings])
-
             error_msg = f"Генерация остановлена. Причина: {finish_reason}."
             if text_explanation.strip():
                 error_msg += f" Текст: {text_explanation.strip()}."
             error_msg += f" Safety: {safety_info}"
-
             raise Exception(error_msg)
 
         if text_explanation.strip():
@@ -308,7 +293,12 @@ def call_nano_banana_api(
     data_content = inline_data.data
     mime_type = getattr(inline_data, 'mime_type', 'N/A')
 
-    # ПРОВЕРКА: Если MIME-тип не похож на изображение, выбрасываем ошибку
+    # 🌟 ЛОГИРОВАНИЕ ДЛЯ ДИАГНОСТИКИ СБОЯ 🌟
+    logger.info(f"DEBUG: MIME Type from API: {mime_type}")
+    logger.info(f"DEBUG: Data content type: {type(data_content)}")
+    # -------------------------------------
+
+    # ПРОВЕРКА: Если MIME-тип не похож на изображение
     if not mime_type.lower().startswith("image/"):
          raise Exception(f"Ожидалось изображение, но получен MIME-тип: {mime_type}. Возможно, модель вернула невалидный файл.")
 
@@ -325,14 +315,17 @@ def call_nano_banana_api(
     else:
         raise Exception(f"Объект inline_data.data имеет неожиданный тип: {type(data_content)}. Ожидались str (Base64) или bytes.")
 
-    # ДОБАВЛЕНА ОТЛАДОЧНАЯ ПРОВЕРКА: Если Gemini вернул пустые байты
+    # 🌟 КРИТИЧЕСКАЯ ПРОВЕРКА: Размер байтов 🌟
     if len(output_image_bytes) == 0:
         logger.error("--- DEBUG: API вернул пустые байты изображения (длина 0). ---")
         raise Exception("API вернул пустые данные (длина 0).")
 
+    logger.info(f"DEBUG: Successfully extracted bytes. Size: {len(output_image_bytes)} bytes.")
+    # -------------------------------------
+
     return output_image_bytes
 
-# --- Главный класс бота и обработчики ---
+# --- Главный класс бота и обработчики (Промпты и подтверждение обновлены) ---
 
 class FashionBot:
     def __init__(self, token: str):
@@ -342,6 +335,7 @@ class FashionBot:
         self.setup_handlers()
 
     def setup_handlers(self):
+        # ... (регистрация обработчиков - без изменений)
         self.dp.message.register(self.start_handler, Command("start"))
 
         self.dp.message.register(self.add_balance_handler, Command("add_balance"), F.from_user.id == ADMIN_ID)
@@ -365,7 +359,8 @@ class FashionBot:
         self.dp.callback_query.register(self.view_handler, F.data.startswith("view_"), StateFilter(ProductCreationStates.waiting_for_view))
         self.dp.callback_query.register(self.confirmation_handler, F.data.startswith("confirm_"), StateFilter(ProductCreationStates.waiting_for_confirmation))
 
-    # --- Вспомогательные функции ---
+
+    # --- Вспомогательные функции (Промпты обновлены) ---
     async def generate_summary(self, data: Dict[str, Any]) -> str:
         gender = data.get('gender')
 
@@ -443,7 +438,7 @@ class FashionBot:
 
         prompt += style_desc + " "
 
-        # Усиленный финальный блок промпта
+        # Усиленный финальный блок промпта (для устранения неестественных лиц и общего улучшения качества)
         prompt += (
             "Use the input image only as a reference for the garment and texture. The generated photo must look "
             "like a real photograph taken by a professional fashion photographer. "
@@ -456,7 +451,8 @@ class FashionBot:
 
         return prompt.strip()
 
-    # --- Обработчики команд ---
+    # ... (Остальные обработчики команд и FSM - без изменений)
+
     async def start_handler(self, message: Message):
         self.db.get_user_balance(
             message.from_user.id,
@@ -879,7 +875,7 @@ class FashionBot:
 
 
     async def confirmation_handler(self, callback: CallbackQuery, state: FSMContext):
-        """Обработчик подтверждения генерации (ФИНАЛЬНЫЙ С УЛУЧШЕННОЙ ОБРАБОТКОЙ ОШИБОК)"""
+        """Обработчик подтверждения генерации (УЛУЧШЕННАЯ ОБРАБОТКА ОШИБОК)"""
         await callback.message.edit_reply_markup(reply_markup=None)
 
         if callback.data != "confirm_generate":
@@ -904,7 +900,7 @@ class FashionBot:
 
         output_image_bytes = None
         generation_successful = False
-        balance_deducted = (user_id == ADMIN_ID) or True # Предполагаем, что списание произошло, чтобы вернуть его в случае сбоя
+        balance_deducted = (user_id == ADMIN_ID) or True
 
         try:
             # 1. Вызов API
@@ -912,6 +908,8 @@ class FashionBot:
 
             # 2. Проверка целостности изображения (PIL)
             image_stream = io.BytesIO(output_image_bytes)
+
+            # 🚨 Здесь происходит сбой UnidentifiedImageError
             img = Image.open(image_stream)
 
             # 3. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительное пересохранение в PNG
@@ -957,10 +955,10 @@ class FashionBot:
             error_message = (
                 f"❌ **Ошибка генерации (Сбой API или формата)**\n\n"
                 f"Произошел сбой при обработке: \n"
-                f"```\n{error_details[:500]}...\n```" # Увеличен вывод для лучшей диагностики
+                f"```\n{error_details[:500]}...\n```"
             )
 
-            logger.error(f"Ошибка при генерации изображения: {e}", exc_info=True) # exc_info=True для полного traceback
+            logger.error(f"Ошибка при генерации изображения: {e}", exc_info=True)
 
             builder = InlineKeyboardBuilder()
             builder.button(text="🔙 Назад", callback_data="back_to_main")
