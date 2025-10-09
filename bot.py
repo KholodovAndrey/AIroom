@@ -619,8 +619,182 @@ class FashionBot:
             await state.set_state(ProductCreationStates.waiting_for_height)
             await message.answer("📏 Напишите рост модели (в см):")
 
-    # ... (остальные методы класса FashionBot остаются без изменений)
-    # Для экономии места оставляю только измененные методы
+    async def height_handler(self, message: Message, state: FSMContext):
+        """Обработчик ввода роста"""
+        height = message.text
+        if not height.isdigit():
+            await message.answer("❌ Пожалуйста, введите числовое значение роста в см:")
+            return
+            
+        await state.update_data(height=height)
+        await state.set_state(ProductCreationStates.waiting_for_location)
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🏙️ Улица", callback_data="location_street")
+        builder.button(text="📸 Фотостудия", callback_data="location_studio") 
+        builder.button(text="📐 Фотозона на полу", callback_data="location_floor")
+        builder.adjust(1)
+        
+        await message.answer("📍 Пожалуйста выберите локацию:", reply_markup=builder.as_markup())
+
+    async def location_handler(self, callback: CallbackQuery, state: FSMContext):
+        """Обработчик выбора локации"""
+        location_map = {
+            "location_street": LocationType.STREET,
+            "location_studio": LocationType.STUDIO,
+            "location_floor": LocationType.FLOOR_ZONE
+        }
+        
+        location = location_map[callback.data]
+        await state.update_data(location=location)
+        
+        data = await state.get_data()
+        gender = data['gender']
+        
+        builder = InlineKeyboardBuilder()
+        
+        if gender == GenderType.KIDS:
+            age_groups = AgeGroup.KIDS.value
+        else:
+            age_groups = AgeGroup.WOMEN_MEN.value
+            
+        for age in age_groups:
+            builder.button(text=age, callback_data=f"age_{age}")
+            
+        builder.adjust(2)
+        
+        await callback.message.answer("🎂 Пожалуйста выберите возраст модели:", reply_markup=builder.as_markup())
+        await state.set_state(ProductCreationStates.waiting_for_age)
+
+    async def age_handler(self, callback: CallbackQuery, state: FSMContext):
+        """Обработчик выбора возраста"""
+        age = callback.data.replace("age_", "")
+        await state.update_data(age=age)
+        
+        data = await state.get_data()
+        gender = data['gender']
+        
+        if gender == GenderType.KIDS:
+            await state.set_state(ProductCreationStates.waiting_for_location_style)
+            
+            builder = InlineKeyboardBuilder()
+            builder.button(text="🎄 Новогодняя", callback_data="style_new_year")
+            builder.button(text="☀️ Лето", callback_data="style_summer")
+            builder.button(text="🌳 Природа", callback_data="style_nature")
+            builder.button(text="🏞️ Парк (зима)", callback_data="style_park_winter")
+            builder.button(text="🌲 Парк (лето)", callback_data="style_park_summer")
+            builder.button(text="🏢 Обычный", callback_data="style_regular")
+            builder.button(text="🚗 Рядом с машиной", callback_data="style_car")
+            builder.adjust(2)
+            
+            await callback.message.answer("🎨 Пожалуйста, выберите стиль локации:", reply_markup=builder.as_markup())
+        else:
+            await state.set_state(ProductCreationStates.waiting_for_size)
+            
+            builder = InlineKeyboardBuilder()
+            builder.button(text="42-46", callback_data="size_42_46")
+            builder.button(text="50-54", callback_data="size_50_54")
+            builder.button(text="58-64", callback_data="size_58_64")
+            builder.button(text="64-68", callback_data="size_64_68")
+            builder.adjust(2)
+            
+            await callback.message.answer("📏 Пожалуйста выберите размер одежды:", reply_markup=builder.as_markup())
+
+    async def size_handler(self, callback: CallbackQuery, state: FSMContext):
+        """Обработчик выбора размера"""
+        size_map = {
+            "size_42_46": SizeType.SIZE_42_46,
+            "size_50_54": SizeType.SIZE_50_54,
+            "size_58_64": SizeType.SIZE_58_64,
+            "size_64_68": SizeType.SIZE_64_68
+        }
+        
+        size = size_map[callback.data]
+        await state.update_data(size=size)
+        await state.set_state(ProductCreationStates.waiting_for_location_style)
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🎄 Новогодняя", callback_data="style_new_year")
+        builder.button(text="☀️ Лето", callback_data="style_summer")
+        builder.button(text="🌳 Природа", callback_data="style_nature")
+        builder.button(text="🏞️ Парк (зима)", callback_data="style_park_winter")
+        builder.button(text="🌲 Парк (лето)", callback_data="style_park_summer")
+        builder.button(text="🏢 Обычный", callback_data="style_regular")
+        builder.button(text="🚗 Рядом с машиной", callback_data="style_car")
+        builder.adjust(2)
+        
+        await callback.message.answer("🎨 Пожалуйста, выберите стиль локации:", reply_markup=builder.as_markup())
+
+    async def location_style_handler(self, callback: CallbackQuery, state: FSMContext):
+        """Обработчик выбора стиля локации"""
+        style_map = {
+            "style_new_year": LocationStyle.NEW_YEAR,
+            "style_summer": LocationStyle.SUMMER,
+            "style_nature": LocationStyle.NATURE,
+            "style_park_winter": LocationStyle.PARK_WINTER,
+            "style_park_summer": LocationStyle.PARK_SUMMER,
+            "style_regular": LocationStyle.REGULAR,
+            "style_car": LocationStyle.CAR
+        }
+        
+        location_style = style_map[callback.data]
+        await state.update_data(location_style=location_style)
+        await state.set_state(ProductCreationStates.waiting_for_pose)
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🪑 Сидя", callback_data="pose_sitting")
+        builder.button(text="🧍 Стоя", callback_data="pose_standing")
+        builder.adjust(2)
+        
+        await callback.message.answer("🧘 Пожалуйста выберите положение тела:", reply_markup=builder.as_markup())
+
+    async def pose_handler(self, callback: CallbackQuery, state: FSMContext):
+        """Обработчик выбора позы"""
+        pose_map = {
+            "pose_sitting": PoseType.SITTING,
+            "pose_standing": PoseType.STANDING
+        }
+        
+        pose = pose_map[callback.data]
+        await state.update_data(pose=pose)
+        await state.set_state(ProductCreationStates.waiting_for_view)
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔙 Сзади", callback_data="view_back")
+        builder.button(text="👤 Передняя часть", callback_data="view_front")
+        builder.adjust(2)
+        
+        await callback.message.answer("👀 Пожалуйста выберите вид:", reply_markup=builder.as_markup())
+
+    async def view_handler(self, callback: CallbackQuery, state: FSMContext):
+        """Обработчик выбора вида"""
+        view_map = {
+            "view_back": ViewType.BACK,
+            "view_front": ViewType.FRONT
+        }
+        
+        view = view_map[callback.data]
+        await state.update_data(view=view)
+        
+        # Формируем сводку
+        data = await state.get_data()
+        summary = await self.generate_summary(data)
+        prompt = await self.generate_prompt(data)
+        
+        await state.update_data(prompt=prompt)
+        
+        user_id = callback.from_user.id
+        self.db.add_generation(user_id, prompt)
+        
+        summary_text = f"📋 Проверьте выбранные параметры:\n\n{summary}"
+        
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🚀 Начать генерацию", callback_data="confirm_generate")
+        builder.button(text="✏️ Внести изменения", callback_data="confirm_edit")
+        builder.adjust(1)
+        
+        await callback.message.answer(summary_text, reply_markup=builder.as_markup())
+        await state.set_state(ProductCreationStates.waiting_for_confirmation)
 
     async def confirmation_handler(self, callback: CallbackQuery, state: FSMContext):
         """Обработчик подтверждения генерации"""
@@ -700,7 +874,168 @@ class FashionBot:
             
         await state.clear()
 
-    # ... (остальные методы класса FashionBot)
+    async def add_balance_handler(self, message: Message):
+        """Добавление баланса пользователю (только для админа)"""
+        if message.from_user.id != ADMIN_ID:
+            return
+            
+        try:
+            _, user_id_str, amount_str = message.text.split()
+            user_id = int(user_id_str)
+            amount = int(amount_str)
+            
+            current_balance = self.db.get_user_balance(user_id)
+            new_balance = current_balance + amount
+            self.db.update_user_balance(user_id, new_balance)
+            
+            await message.answer(f"✅ Пользователю {user_id} добавлено {amount} генераций. Всего: {new_balance}")
+            
+            try:
+                await self.bot.send_message(
+                    user_id, 
+                    f"🎉 Вам добавлено {amount} генераций!\n"
+                    f"Теперь у вас {new_balance} генераций."
+                )
+            except Exception as e:
+                await message.answer(f"⚠️ Не удалось отправить уведомление пользователю: {e}")
+            
+        except Exception as e:
+            await message.answer("❌ Использование: /add_balance <user_id> <amount>")
+
+    async def stats_handler(self, message: Message):
+        """Статистика (только для админа)"""
+        if message.from_user.id != ADMIN_ID:
+            return
+            
+        total_users, total_generations, total_balance = self.db.get_all_users_stats()
+        
+        stats_text = (
+            f"📊 Статистика бота:\n\n"
+            f"👥 Всего пользователей: {total_users}\n"
+            f"🔄 Всего генераций: {total_generations}\n"
+            f"💰 Общий баланс: {total_balance} генераций"
+        )
+        
+        await message.answer(stats_text)
+
+    async def generate_summary(self, data: Dict[str, Any]) -> str:
+        """Генерация сводки выбранных параметров"""
+        gender_text = {
+            GenderType.WOMEN: "👚 Женская одежда",
+            GenderType.MEN: "👔 Мужская одежда", 
+            GenderType.KIDS: "👶 Детская одежда",
+            GenderType.DISPLAY: "🖼️ Витринное фото"
+        }
+        
+        if data['gender'] == GenderType.DISPLAY:
+            return "🖼️ Витринное фото: товар на белом фоне"
+        
+        summary = (
+            f"📦 Категория: {gender_text[data['gender']]}\n"
+            f"📏 Рост: {data['height']} см\n"
+            f"📍 Локация: {data['location'].value}\n"
+            f"🎂 Возраст: {data['age']} лет\n"
+        )
+        
+        if data['gender'] != GenderType.KIDS and 'size' in data:
+            summary += f"📏 Размер: {data['size'].value}\n"
+            
+        summary += (
+            f"🎨 Стиль локации: {data['location_style'].value}\n"
+            f"🧘 Положение: {data['pose'].value}\n"
+            f"👀 Вид: {data['view'].value}"
+        )
+        
+        return summary
+
+    async def generate_prompt(self, data: Dict[str, Any]) -> str:
+        """Генерация промта на английском"""
+        gender = data['gender']
+        
+        if gender == GenderType.DISPLAY:
+            return (
+                "Create a professional product display photo with pure white background. "
+                "The product should be perfectly centered in the frame, well-lit with soft studio lighting. "
+                "The image should be clean, crisp and high-resolution, suitable for e-commerce. "
+                "No shadows, no props, no text, just the product on white background. "
+                "The product must be an exact copy of the reference image provided."
+            )
+        
+        gender_map = {
+            GenderType.WOMEN: "woman",
+            GenderType.MEN: "man", 
+            GenderType.KIDS: "girl" if data['age'] in ["0.3-1", "2-4", "7-10"] else "boy"
+        }
+        
+        location_map = {
+            LocationType.STREET: "urban street",
+            LocationType.STUDIO: "professional photo studio",
+            LocationType.FLOOR_ZONE: "minimalist floor photo zone"
+        }
+        
+        view_map = {
+            ViewType.BACK: "back to camera, demonstrating the back of the product",
+            ViewType.FRONT: "facing camera"
+        }
+        
+        pose_map = {
+            PoseType.SITTING: "sitting",
+            PoseType.STANDING: "standing"
+        }
+        
+        season_map = {
+            LocationStyle.NEW_YEAR: "winter",
+            LocationStyle.SUMMER: "summer", 
+            LocationStyle.PARK_WINTER: "winter",
+            LocationStyle.PARK_SUMMER: "summer",
+            LocationStyle.REGULAR: "current season",
+            LocationStyle.CAR: "current season",
+            LocationStyle.NATURE: "spring"
+        }
+        
+        prompt_parts = [
+            f"Create a hyper-realistic, high-quality photo of a {gender_map[data['gender']]}",
+            f"wearing my product, exactly replicating the reference image I provide.",
+            f"The scene takes place at {location_map[data['location']]}.",
+            f"The model is {data['age']} years old, height {data['height']} cm,",
+        ]
+        
+        if data['gender'] != GenderType.KIDS and 'size' in data:
+            prompt_parts.append(f"with body type {data['size'].value}.")
+        else:
+            prompt_parts.append("with appropriate body type for the age.")
+        
+        prompt_parts.extend([
+            f"The photo should be taken from full-length view.",
+            f"The season is {season_map[data['location_style']]},",
+            f"and the model wears automatically selected footwear matching the style and weather.",
+            f"The outfit must be an exact 100% copy of my product from the reference image",
+            f"— do not create, modify, or add any details that are not visible.",
+            f"If the product has a central zipper, it must be fully closed.",
+            f"If there is no central zipper, do not include one.",
+            f"The {gender_map[data['gender']]} should pose like a professional model",
+            f"— expressive, confident, and natural, as in a real fashion photoshoot.",
+            f"The posture should highlight the clothing's shape and fit,",
+            f"but hands must never be in pockets.",
+            f"The model should be {pose_map[data['pose']]} and {view_map[data['view']]}.",
+            f"Lighting must look realistic and flattering,",
+            f"emphasizing the texture, material, and true color of the product.",
+            f"The background should complement the scene but never distract from the item.",
+            f"The final image should appear as a professional fashion editorial photo,",
+            f"photorealistic, clean, and perfectly balanced in composition and proportions."
+        ])
+        
+        return " ".join(prompt_parts)
+
+    async def run(self):
+        """Запуск бота"""
+        logger.info("🤖 Бот запускается...")
+        try:
+            await self.dp.start_polling(self.bot)
+        except Exception as e:
+            logger.error(f"❌ Ошибка при запуске бота: {e}")
+        finally:
+            await self.bot.session.close()
 
 async def main():
     bot = FashionBot(BOT_TOKEN)
