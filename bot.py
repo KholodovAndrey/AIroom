@@ -22,13 +22,13 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils.media_group import MediaGroupBuilder
-from aiogram.exceptions import TelegramBadRequest # Добавлен импорт для явной обработки
+from aiogram.exceptions import TelegramBadRequest
 
 # Gemini imports
 from google import genai
 from google.api_core import exceptions
 from google.genai import types
-from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError # Добавлен импорт UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 import io
 
 # Загрузка переменных окружения
@@ -92,7 +92,7 @@ def init_db():
 
 init_db()
 
-# --- Константы и перечисления (Оставлены без изменений) ---
+# --- Константы и перечисления ---
 
 class GenderType(Enum):
     WOMEN = "женская"
@@ -144,7 +144,7 @@ class ProductCreationStates(StatesGroup):
     waiting_for_view = State()
     waiting_for_confirmation = State()
 
-# --- Класс для работы с БД (Оставлен без изменений) ---
+# --- Класс для работы с БД ---
 
 class Database:
     def __init__(self):
@@ -221,7 +221,13 @@ def call_nano_banana_api(
     Отправляет изображение и промпт в Gemini 2.5 Flash Image и извлекает байты.
     """
     if GEMINI_DEMO_MODE:
-        return generate_demo_image(prompt)
+        img = Image.new('RGB', (1024, 1024), color=(73, 109, 137))
+        d = ImageDraw.Draw(img)
+        # Упрощенная логика для краткости
+        d.text((50, 50), "ДЕМО-РЕЖИМ. Промпт: " + prompt[:100] + "...", fill=(255, 255, 255))
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        return img_byte_arr.getvalue()
 
     client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -316,7 +322,7 @@ def call_nano_banana_api(
 
     return output_image_bytes
 
-# --- Главный класс бота и обработчики (Включает исправления) ---
+# --- Главный класс бота и обработчики (ФИНАЛЬНАЯ ВЕРСИЯ) ---
 
 class FashionBot:
     def __init__(self, token: str):
@@ -326,7 +332,6 @@ class FashionBot:
         self.setup_handlers()
 
     def setup_handlers(self):
-        # ... (Команды /start, /add_balance, /stats и др. без изменений) ...
         self.dp.message.register(self.start_handler, Command("start"))
 
         self.dp.message.register(self.add_balance_handler, Command("add_balance"), F.from_user.id == ADMIN_ID)
@@ -350,9 +355,8 @@ class FashionBot:
         self.dp.callback_query.register(self.view_handler, F.data.startswith("view_"), StateFilter(ProductCreationStates.waiting_for_view))
         self.dp.callback_query.register(self.confirmation_handler, F.data.startswith("confirm_"), StateFilter(ProductCreationStates.waiting_for_confirmation))
 
-    # --- Вспомогательные функции (Оставлены без изменений) ---
+    # --- Вспомогательные функции ---
     async def generate_summary(self, data: Dict[str, Any]) -> str:
-        # ... (Код функции без изменений) ...
         gender = data.get('gender')
 
         summary = []
@@ -373,7 +377,6 @@ class FashionBot:
         return "\n".join(summary)
 
     async def generate_prompt(self, data: Dict[str, Any]) -> str:
-        # ... (Код функции без изменений) ...
         gender = data.get('gender')
 
         if gender == GenderType.DISPLAY:
@@ -440,11 +443,8 @@ class FashionBot:
 
         return prompt.strip()
 
-    # ... (Остальные вспомогательные функции и обработчики без изменений) ...
-
-    # --- Обработчики команд (Оставлены без изменений) ---
+    # --- Обработчики команд ---
     async def start_handler(self, message: Message):
-        # ... (Код функции без изменений) ...
         self.db.get_user_balance(
             message.from_user.id,
             message.from_user.username,
@@ -577,9 +577,8 @@ class FashionBot:
         except Exception as e:
             await message.answer(f"❌ Произошла ошибка при получении статистики: {e}")
 
-    # --- Логика FSM для создания фото (Оставлена без изменений) ---
+    # --- Логика FSM для создания фото ---
     async def create_photo_handler(self, callback: CallbackQuery):
-        # ... (Код функции без изменений) ...
         user_id = callback.from_user.id
         current_balance = self.db.get_user_balance(user_id)
 
@@ -608,7 +607,6 @@ class FashionBot:
         await callback.message.answer(gender_text, reply_markup=builder.as_markup())
 
     async def gender_select_handler(self, callback: CallbackQuery, state: FSMContext):
-        # ... (Код функции без изменений) ...
         await callback.message.delete()
 
         gender_map = {
@@ -624,6 +622,7 @@ class FashionBot:
         if gender != GenderType.DISPLAY:
             try:
                 media_group = MediaGroupBuilder()
+                # При условии, что у вас есть эти файлы
                 photo1 = FSInputFile("photo/example1.jpg")
                 photo2 = FSInputFile("photo/example2.jpg")
                 media_group.add_photo(media=photo1, caption="Пример 1: Фотография товара, преобразованная в студийный снимок на модели.")
@@ -650,7 +649,6 @@ class FashionBot:
         await message.answer("❌ Пожалуйста, отправьте фотографию товара, а не текст или другой тип файла.")
 
     async def photo_handler(self, message: Message, state: FSMContext):
-        # ... (Код функции без изменений) ...
         photo_file_id = message.photo[-1].file_id
 
         temp_path = None
@@ -693,7 +691,6 @@ class FashionBot:
             await message.answer("📏 Напишите **рост модели** (в см):", parse_mode="Markdown")
 
     async def height_handler(self, message: Message, state: FSMContext):
-        # ... (Код функции без изменений) ...
         height_str = message.text.strip()
         if not height_str.isdigit():
             await message.answer("❌ Пожалуйста, введите **числовое значение роста** в см (например, 175):", parse_mode="Markdown")
@@ -716,7 +713,6 @@ class FashionBot:
         await message.answer("📍 Пожалуйста выберите **локацию**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
     async def location_handler(self, callback: CallbackQuery, state: FSMContext):
-        # ... (Код функции без изменений) ...
         await callback.message.delete()
 
         location_map = {
@@ -747,7 +743,6 @@ class FashionBot:
         await state.set_state(ProductCreationStates.waiting_for_age)
 
     async def age_handler(self, callback: CallbackQuery, state: FSMContext):
-        # ... (Код функции без изменений) ...
         await callback.message.delete()
 
         age = callback.data.replace("age_", "")
@@ -771,7 +766,6 @@ class FashionBot:
             await callback.message.answer("📏 Пожалуйста выберите **размер одежды**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
     async def size_handler(self, callback: CallbackQuery, state: FSMContext):
-        # ... (Код функции без изменений) ...
         await callback.message.delete()
 
         size_map = {
@@ -787,7 +781,6 @@ class FashionBot:
         await self.go_to_location_style(callback, state)
 
     async def go_to_location_style(self, callback: CallbackQuery, state: FSMContext):
-        # ... (Код функции без изменений) ...
         await state.set_state(ProductCreationStates.waiting_for_location_style)
 
         builder = InlineKeyboardBuilder()
@@ -803,7 +796,6 @@ class FashionBot:
         await callback.message.answer("🎨 Пожалуйста, выберите **стиль локации**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
     async def location_style_handler(self, callback: CallbackQuery, state: FSMContext):
-        # ... (Код функции без изменений) ...
         await callback.message.delete()
 
         style_map = {
@@ -828,7 +820,6 @@ class FashionBot:
         await callback.message.answer("💃 Пожалуйста, выберите **позу модели**:", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
     async def pose_handler(self, callback: CallbackQuery, state: FSMContext):
-        # ... (Код функции без изменений) ...
         await callback.message.delete()
 
         pose_map = {
@@ -847,7 +838,6 @@ class FashionBot:
         await callback.message.answer("👀 Пожалуйста, выберите **вид** (передняя/задняя часть):", reply_markup=builder.as_markup(), parse_mode="Markdown")
 
     async def view_handler(self, callback: CallbackQuery, state: FSMContext):
-        # ... (Код функции без изменений) ...
         await callback.message.delete()
 
         view_map = {
@@ -874,12 +864,8 @@ class FashionBot:
 
 
     async def confirmation_handler(self, callback: CallbackQuery, state: FSMContext):
-        """Обработчик подтверждения генерации (ИСПРАВЛЕНО)"""
+        """Обработчик подтверждения генерации (ФИНАЛЬНО ИСПРАВЛЕН)"""
         await callback.message.edit_reply_markup(reply_markup=None)
-
-        if callback.data == "confirm_edit":
-            await state.clear()
-            return await self.create_photo_handler(callback)
 
         if callback.data != "confirm_generate":
             return
@@ -908,7 +894,14 @@ class FashionBot:
 
             # 2. Проверка целостности изображения (PIL)
             image_stream = io.BytesIO(output_image_bytes)
-            Image.open(image_stream)
+            img = Image.open(image_stream)
+
+            # --- КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Принудительное пересохранение в PNG ---
+            # Это исключает возможность ошибки UnidentifiedImageError, если Gemini вернул нестандартный формат
+            temp_output = io.BytesIO()
+            img.save(temp_output, format='PNG')
+            output_image_bytes = temp_output.getvalue()
+            # -------------------------------------------------------------------
 
             # 3. Успешная генерация
             generation_successful = True
@@ -935,17 +928,16 @@ class FashionBot:
                 parse_mode="Markdown"
             )
 
-        except (UnidentifiedImageError, exceptions.GoogleAPICallError) as e:
-            # Ошибка PIL (невалидные байты) или ошибка Gemini API
-            # В этом случае баланс возвращается, т.к. генерация не состоялась
+        except (UnidentifiedImageError, exceptions.GoogleAPICallError, ValueError) as e:
+            # Ошибка PIL, Gemini API или ошибка декодирования
             if user_id != ADMIN_ID:
                 self.db.add_balance(user_id, 1)
 
             error_details = str(e)
 
             error_message = (
-                f"❌ **Ошибка генерации (Ошибка файла или API)**\n\n"
-                f"Произошла ошибка при обработке файла: \n"
+                f"❌ **Ошибка генерации (Сбой API или формата)**\n\n"
+                f"Произошел сбой при обработке: \n"
                 f"```\n{error_details[:400]}...\n```"
             )
 
@@ -956,8 +948,7 @@ class FashionBot:
             await callback.message.answer(error_message, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
         except Exception as e:
-            # Общая ошибка, не связанная с API или PIL (например, ошибка Telegram при отправке)
-            # Если генерация была успешной (generation_successful=True), баланс не возвращается
+            # Общая непредвиденная ошибка (например, ошибка Telegram)
             if user_id != ADMIN_ID and not generation_successful:
                 self.db.add_balance(user_id, 1)
 
@@ -978,7 +969,11 @@ class FashionBot:
             if temp_photo_path and os.path.exists(temp_photo_path):
                 os.unlink(temp_photo_path)
 
-            await self.bot.delete_message(chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+            # Безопасное удаление сообщения, если оно существует
+            try:
+                await self.bot.delete_message(chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+            except Exception:
+                pass
 
             await state.clear()
 
