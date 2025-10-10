@@ -10,7 +10,7 @@ class GenderType(Enum):
     WOMEN = "женская"
     MEN = "мужская"
     KIDS = "детская"
-    DISPLAY = "витринное фото"
+    FLAT_LAY = "фото на полу"
     WHITE_BG = "на белом фоне"
 
 

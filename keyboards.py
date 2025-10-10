@@ -40,7 +40,7 @@ def get_gender_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="👚 Женская одежда", callback_data="gender_women")
     builder.button(text="👔 Мужская одежда", callback_data="gender_men")
     builder.button(text="👶 Детская одежда", callback_data="gender_kids")
-    builder.button(text="🖼️ Витринное фото", callback_data="gender_display")
+    builder.button(text="🖼️ Фото на полу", callback_data="gender_flat_lay")
     builder.button(text="⚪ На белом фоне", callback_data="gender_white_bg")
     builder.button(text="🔙 Назад", callback_data="back_to_main")
     builder.adjust(1)
@@ -52,7 +52,6 @@ def get_location_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🏙️ Улица", callback_data="location_street")
     builder.button(text="📸 Фотостудия", callback_data="location_studio")
-    builder.button(text="📐 Фотозона на полу", callback_data="location_floor")
     builder.adjust(1)
     return builder.as_markup()
 

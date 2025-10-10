@@ -50,7 +50,7 @@ async def generate_prompt(data: Dict[str, Any]) -> str:
     """
     Генерирует подробный промпт для Gemini API на основе выбранных параметров.
     """
-    gender = data.get('gender', GenderType.DISPLAY)
+    gender = data.get('gender', GenderType.FLAT_LAY)
     
     # Добавляем описание телосложения в зависимости от размера
     size = data.get('size')
@@ -66,20 +66,18 @@ async def generate_prompt(data: Dict[str, Any]) -> str:
         elif "64-68" in size_value:
             body_type_description = "Очень полная фигура, гигантские размеры, очень толстое телосложение."
 
-    if gender == GenderType.DISPLAY:
-        base_prompt = (
-            "Create a professional, high-quality, product-focused photo suitable for "
-            "an online store's storefront/display (витринное фото). "
+    # НОВЫЙ БЛОК ДЛЯ ФОТО + ПРОМТ
+    if gender == GenderType.FLAT_LAY:
+        flat_lay_prompt = (
+            "Flat lay shot of a white fluffy rug, with autumn leaves and a small potted succulent plant for decoration. "
+            "The background also includes a grey textured floor in the bottom third of the frame. "
+            "The clothing item should be perfectly arranged on the rug, looking clean, professional and appealing. "
             "The clothing must be perfectly ironed, without any wrinkles or creases. "
-            "Seamlessly replace the background of the input product image with a "
-            "stylized, minimalist, and aesthetically pleasing background, while keeping the product clear and well-lit. "
-            "Ensure the final image is visually appealing and studio-quality. "
             "Image aspect ratio: 4:3. "
-            "If the clothing in the photo is wrinkled or has folds, they should not be visible in the final image. "
-            "Avoid excessive retouching, keep natural appearance. "
-            "European appearance for any human elements."
+            "If the clothing in the original photo is wrinkled or has folds, they must be completely removed in the final image. "
+            "Ensure the final image looks like a professional product photography for an online store."
         )
-        return base_prompt
+        return flat_lay_prompt
     
     if gender == GenderType.WHITE_BG:
         view = data.get('white_bg_view', 'front')
