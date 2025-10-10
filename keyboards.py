@@ -5,7 +5,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup
 
 from config import SUPPORT_USERNAME
-from models import AgeGroup, GenderType
+from models import AgeGroup, GenderType, LocationType
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -40,7 +40,7 @@ def get_gender_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="👚 Женская одежда", callback_data="gender_women")
     builder.button(text="👔 Мужская одежда", callback_data="gender_men")
     builder.button(text="👶 Детская одежда", callback_data="gender_kids")
-    builder.button(text="🖼️ Фото на полу", callback_data="gender_flat_lay")
+    builder.button(text="🖼️ Фото на полу", callback_data="gender_display")
     builder.button(text="⚪ На белом фоне", callback_data="gender_white_bg")
     builder.button(text="🔙 Назад", callback_data="back_to_main")
     builder.adjust(1)

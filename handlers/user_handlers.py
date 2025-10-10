@@ -84,6 +84,9 @@ async def topup_balance_handler(callback: CallbackQuery):
 @router.callback_query(F.data == "create_photo")
 async def create_photo_handler(callback: CallbackQuery, state: FSMContext = None):
     """Обработчик начала создания фото"""
+    # Сразу отвечаем на callback чтобы избежать ошибки "query is too old"
+    await callback.answer()
+    
     # Очищаем предыдущее состояние если есть
     if state:
         import os
@@ -101,12 +104,10 @@ async def create_photo_handler(callback: CallbackQuery, state: FSMContext = None
             "❌ Недостаточно генераций. Пожалуйста, пополните баланс.",
             reply_markup=get_insufficient_balance_keyboard()
         )
-        await callback.answer()
         return
 
     gender_text = "Выберите пожалуйста какой продукт вы хотите создать?"
     await callback.message.answer(gender_text, reply_markup=get_gender_keyboard())
-    await callback.answer()
 
 
 async def show_main_menu(message: Message):

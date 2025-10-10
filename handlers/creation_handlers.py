@@ -141,7 +141,7 @@ async def generate_summary(data: Dict[str, Any]) -> str:
     """
     summary_parts = []
 
-    gender = data.get('gender', GenderType.DISPLAY)
+    gender = data.get('gender', GenderType.FLAT_LAY)
     summary_parts.append(f"📦 **Категория**: {gender.value.capitalize()}")
 
     if gender == GenderType.WHITE_BG:
@@ -186,7 +186,7 @@ async def gender_select_handler(callback: CallbackQuery, state: FSMContext):
         "gender_women": GenderType.WOMEN,
         "gender_men": GenderType.MEN,
         "gender_kids": GenderType.KIDS,
-        "gender_display": GenderType.DISPLAY,
+        "gender_display": GenderType.FLAT_LAY,
         "gender_white_bg": GenderType.WHITE_BG
     }
 
@@ -194,7 +194,7 @@ async def gender_select_handler(callback: CallbackQuery, state: FSMContext):
     await state.update_data(gender=gender)
 
     # Попытка загрузить примеры фото (опционально)
-    if gender not in [GenderType.DISPLAY, GenderType.WHITE_BG]:
+    if gender not in [GenderType.FLAT_LAY, GenderType.WHITE_BG]:
         import os
         if os.path.exists("photo/example1.jpg") and os.path.exists("photo/example2.jpg"):
             try:
@@ -209,7 +209,7 @@ async def gender_select_handler(callback: CallbackQuery, state: FSMContext):
         else:
             logger.info("Примеры фото не найдены, пропускаем")
 
-    if gender == GenderType.DISPLAY:
+    if gender == GenderType.FLAT_LAY:
         instruction_text = (
             "📸 Пожалуйста пришлите фотографию вашего товара для создания витринного фото.\n\n"
             "⚠️ Обратите внимание: фотография вашего товара должна быть четко видна "
@@ -268,7 +268,7 @@ async def photo_handler(message: Message, state: FSMContext, bot):
     data = await state.get_data()
     gender = data['gender']
 
-    if gender == GenderType.DISPLAY:
+    if gender == GenderType.FLAT_LAY:
         prompt = await generate_prompt(data)
         await state.update_data(prompt=prompt)
 
