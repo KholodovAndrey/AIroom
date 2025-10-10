@@ -90,48 +90,43 @@ def get_size_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_location_style_keyboard(location_type: str = None) -> InlineKeyboardMarkup:
+def get_location_style_keyboard(location: LocationType = None) -> InlineKeyboardMarkup:
     """Выбор стиля локации с фильтрацией по типу локации"""
     builder = InlineKeyboardBuilder()
     
-    # Базовые стили, доступные для всех локаций
-    basic_styles = {
-        "style_regular": "🏢 Обычный"
-    }
-    
-    # Стили для улицы
-    street_styles = {
-        "style_new_year": "🎄 Новогодняя",
-        "style_summer": "☀️ Лето", 
+    # Все возможные стили
+    all_styles = {
+        "style_regular": "🏢 Обычный",
+        "style_new_year": "🎄 Новогодняя", 
+        "style_summer": "☀️ Лето",
         "style_nature": "🌳 Природа",
         "style_park_winter": "🏞️ Парк (зима)",
         "style_park_summer": "🌲 Парк (лето)",
         "style_car": "🚗 Рядом с машиной"
     }
     
-    # Стили для фотостудии (только нейтральные)
-    studio_styles = {
-        "style_regular": "🏢 Обычный",
-        "style_new_year": "🎄 Новогодняя",
-        "style_summer": "☀️ Лето"
-    }
-    
-    # Стили для фотозоны на полу
-    floor_styles = {
-        "style_regular": "🏢 Обычный",
-        "style_new_year": "🎄 Новогодняя"
-    }
-    
-    # Выбираем стили в зависимости от локации
-    if location_type == "street" or location_type == "Улица":
-        styles = {**basic_styles, **street_styles}
-    elif location_type == "studio" or location_type == "Фотостудия":
-        styles = studio_styles
-    elif location_type == "floor" or location_type == "Фотозона на полу":
-        styles = floor_styles
+    # Определяем какие стили доступны для каждой локации
+    if location == LocationType.STREET:
+        # Для улицы доступны все стили
+        styles = all_styles
+    elif location == LocationType.STUDIO:
+        # Для фотостудии - только нейтральные стили
+        styles = {
+            "style_regular": "🏢 Обычный",
+            "style_new_year": "🎄 Новогодняя",
+            "style_summer": "☀️ Лето"
+        }
+    elif location == LocationType.FLOOR_ZONE:
+        # Для фотозоны на полу - минимальный набор
+        styles = {
+            "style_regular": "🏢 Обычный", 
+            "style_new_year": "🎄 Новогодняя"
+        }
     else:
-        styles = {**basic_styles, **street_styles}  # По умолчанию все стили
+        # По умолчанию (если локация не передана) - все стили
+        styles = all_styles
     
+    # Добавляем кнопки
     for callback_data, text in styles.items():
         builder.button(text=text, callback_data=callback_data)
     

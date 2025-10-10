@@ -130,6 +130,7 @@ async def generate_prompt(data: Dict[str, Any]) -> str:
         f"Focus on natural-looking hands and realistic facial features (if visible). "
         f"Avoid excessive retouching - keep natural skin texture and appearance. "
         f"European facial features and appearance. "
+        f"Image aspect ratio: 4:3. "
         f"Exclude any watermarks or text overlays."
     )
 
@@ -363,12 +364,13 @@ async def age_handler(callback: CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
     gender = data['gender']
+    location = data.get('location')  # Получаем выбранную локацию
 
     if gender == GenderType.KIDS:
         await state.set_state(ProductCreationStates.waiting_for_location_style)
         await callback.message.answer(
             "🎨 Пожалуйста, выберите стиль локации:",
-            reply_markup=get_location_style_keyboard()
+            reply_markup=get_location_style_keyboard(location)  # Передаем локацию
         )
     else:
         await state.set_state(ProductCreationStates.waiting_for_size)
@@ -394,9 +396,13 @@ async def size_handler(callback: CallbackQuery, state: FSMContext):
     await state.update_data(size=size)
     await state.set_state(ProductCreationStates.waiting_for_location_style)
 
+    # Получаем выбранную локацию из состояния
+    data = await state.get_data()
+    location = data.get('location')
+
     await callback.message.answer(
         "🎨 Пожалуйста, выберите стиль локации:",
-        reply_markup=get_location_style_keyboard()
+        reply_markup=get_location_style_keyboard(location)  # Передаем локацию
     )
     await callback.answer()
 
