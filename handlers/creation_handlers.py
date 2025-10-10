@@ -50,6 +50,20 @@ async def generate_prompt(data: Dict[str, Any]) -> str:
     Генерирует подробный промпт для Gemini API на основе выбранных параметров.
     """
     gender = data.get('gender', GenderType.DISPLAY)
+    
+    # Добавляем описание телосложения в зависимости от размера
+    size = data.get('size')
+    body_type_description = ""
+    if size:
+        size_value = size.value if hasattr(size, 'value') else str(size)
+        if "42-46" in size_value:
+            body_type_description = "Стройная фигура, худощавое телосложение."
+        elif "50-54" in size_value:
+            body_type_description = "Полная, но не сильно полная фигура, среднее телосложение, не худое и не очень толстое."
+        elif "58-64" in size_value:
+            body_type_description = "Полная фигура, крупное телосложение, крупные ноги и руки."
+        elif "64-68" in size_value:
+            body_type_description = "Очень полная фигура, гигантские размеры, очень толстое телосложение."
 
     if gender == GenderType.DISPLAY:
         base_prompt = (
@@ -58,7 +72,11 @@ async def generate_prompt(data: Dict[str, Any]) -> str:
             "The clothing must be perfectly ironed, without any wrinkles or creases. "
             "Seamlessly replace the background of the input product image with a "
             "stylized, minimalist, and aesthetically pleasing background, while keeping the product clear and well-lit. "
-            "Ensure the final image is visually appealing and studio-quality."
+            "Ensure the final image is visually appealing and studio-quality. "
+            "Image aspect ratio: 4:3. "
+            "If the clothing in the photo is wrinkled or has folds, they should not be visible in the final image. "
+            "Avoid excessive retouching, keep natural appearance. "
+            "European appearance for any human elements."
         )
         return base_prompt
     
@@ -68,12 +86,17 @@ async def generate_prompt(data: Dict[str, Any]) -> str:
         
         white_bg_prompt = (
             f"Create a professional, high-quality product photograph on a pure white background. "
-            f"Show the clothing item from {view_text}. "
+            f"Show the clothing item from {view_text} as a 3D product visualization. "
             f"The clothing must be perfectly ironed, without any wrinkles or creases. "
+            f"The product should look like a 3D rendered object - clean, crisp, and professional. "
             f"The product should be the main focus, well-lit with soft shadows, "
             f"presented in a clean, commercial style suitable for an online store. "
             f"The background must be completely white (#FFFFFF). "
-            f"Ensure the product looks professional and appealing, as if photographed in a professional studio."
+            f"Ensure the product looks professional and appealing, as if it's a 3D product visualization. "
+            f"Image aspect ratio: 4:3. "
+            f"If the clothing in the original photo is wrinkled or has folds, they must be completely removed in the final image. "
+            f"Avoid excessive retouching, maintain natural fabric texture. "
+            f"European appearance for any human elements."
         )
         return white_bg_prompt
 
@@ -87,20 +110,25 @@ async def generate_prompt(data: Dict[str, Any]) -> str:
     pose = data.get('pose', PoseType.STANDING).value
     view = data.get('view', ViewType.FRONT).value
 
-    model_details = f"a professional, natural-looking model, {gender_text} clothing, height {height} cm, age range {age}"
+    model_details = f"a professional, natural-looking model with European appearance, {gender_text} clothing, height {height} cm, age range {age}"
     if size:
         model_details += f", wearing size {size}"
+    if body_type_description:
+        model_details += f", {body_type_description}"
 
     scene_details = f"in a {location} setting, with a {location_style} atmosphere. Pose: {pose}, View: {view}."
 
     prompt = (
-        f"Generate a hyper-realistic, high-definition (4k), professional fashion photograph. "
+        f"Generate a hyper-realistic, high-definition (4k), professional fashion photograph with 4:3 aspect ratio. "
         f"The image must feature **{model_details}**. "
         f"The clothing on the model must be perfectly ironed, smooth, without any wrinkles, creases or folds. "
+        f"If the clothing in the original photo is wrinkled or has folds, they must be completely removed in the final image. "
         f"The model should be perfectly integrated with the clothing from the input image. "
         f"Scene: **{scene_details}**. "
         f"The model should be well-lit, and the final image should look like it was taken by a top fashion photographer. "
         f"Focus on natural-looking hands and realistic facial features (if visible). "
+        f"Avoid excessive retouching - keep natural skin texture and appearance. "
+        f"European facial features and appearance. "
         f"Exclude any watermarks or text overlays."
     )
 
@@ -139,6 +167,21 @@ async def generate_summary(data: Dict[str, Any]) -> str:
 @router.callback_query(F.data.startswith("gender_"))
 async def gender_select_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик выбора пола/категории"""
+    # Проверяем, есть ли у пользователя бесплатная генерация
+    user_id = callback.from_user.id
+    user_generations = db.get_user_generations_count(user_id)
+    
+    # Если это первая генерация пользователя, даем бесплатную
+    if user_generations == 0:
+        current_balance = db.get_user_balance(user_id)
+        if current_balance == 0:  # Даем бесплатную генерацию только если баланс 0
+            db.update_user_balance(user_id, 1)
+            await callback.message.answer(
+                "🎉 **Вам предоставлена 1 бесплатная генерация!**\n\n"
+                "Вы можете создать свое первое фото бесплатно. "
+                "Для последующих генераций потребуется пополнение баланса."
+            )
+
     gender_map = {
         "gender_women": GenderType.WOMEN,
         "gender_men": GenderType.MEN,
@@ -685,4 +728,3 @@ async def custom_prompt_handler(message: Message, state: FSMContext):
         await state.clear()
         if temp_photo_path and os.path.exists(temp_photo_path):
             os.unlink(temp_photo_path)
-
