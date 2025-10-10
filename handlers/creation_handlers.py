@@ -69,13 +69,22 @@ async def generate_prompt(data: Dict[str, Any]) -> str:
     # НОВЫЙ БЛОК ДЛЯ ФОТО + ПРОМТ
     if gender == GenderType.FLAT_LAY:
         flat_lay_prompt = (
-            "Flat lay shot of a white fluffy rug, with autumn leaves and a small potted succulent plant for decoration. "
-            "The background also includes a grey textured floor in the bottom third of the frame. "
-            "The clothing item should be perfectly arranged on the rug, looking clean, professional and appealing. "
-            "The clothing must be perfectly ironed, without any wrinkles or creases. "
+            "Create a professional flat lay product photo with the following background setup: "
+            "A luxurious, bright white faux fur rug with a deep, shaggy texture as the main surface. "
+            "The background is a dark grey, slightly textured floor occupying the bottom third of the frame. "
+            "Include these decorative elements: "
+            "a cluster of realistic white and cream roses bordering the top edge, "
+            "a single vibrant orange and yellow maple leaf on the right side, "
+            "a smaller green maple leaf on the left side, "
+            "and a tiny potted green succulent plant in the top left corner. "
+            "Soft, diffused natural lighting that creates gentle shadows and emphasizes textures. "
+            "Perfectly centered composition with everything in sharp focus. "
+            "Seamlessly integrate the clothing item from the input photo onto this background, "
+            "making it look naturally placed on the white fur rug. "
+            "The clothing should be perfectly arranged, clean, and professionally presented. "
+            "Remove any wrinkles, creases, or folds from the original clothing photo. "
             "Image aspect ratio: 4:3. "
-            "If the clothing in the original photo is wrinkled or has folds, they must be completely removed in the final image. "
-            "Ensure the final image looks like a professional product photography for an online store."
+            "Ensure the final result looks like high-end e-commerce product photography."
         )
         return flat_lay_prompt
     
