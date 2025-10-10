@@ -36,7 +36,8 @@ from keyboards import (
     get_back_keyboard,
     get_white_bg_view_keyboard,
     get_after_generation_keyboard,
-    get_regenerate_keyboard
+    get_regenerate_keyboard,
+    get_length_keyboard
 )
 from gemini_api import call_gemini_api
 from utils import show_progress_bar
@@ -303,7 +304,10 @@ async def height_handler(message: Message, state: FSMContext):
     await state.update_data(height=height)
     await state.set_state(ProductCreationStates.waiting_for_length)
     
-    await message.answer("📏 Теперь введите длину изделия в см:")
+    await message.answer(
+        "📏 Теперь введите длину изделия в см (или пропустите):",
+        reply_markup=get_length_keyboard()
+    )
 
 
 @router.message(StateFilter(ProductCreationStates.waiting_for_length))
@@ -319,13 +323,21 @@ async def length_handler(message: Message, state: FSMContext):
 
     await message.answer("📍 Пожалуйста выберите локацию:", reply_markup=get_location_keyboard())
 
+@router.callback_query(F.data == "length_skip")
+async def length_skip_handler(callback: CallbackQuery, state: FSMContext):
+    """Обработчик пропуска ввода длины"""
+    await state.update_data(length="70")  # Значение по умолчанию
+    await state.set_state(ProductCreationStates.waiting_for_location)
+
+    await callback.message.answer("📍 Пожалуйста выберите локацию:", reply_markup=get_location_keyboard())
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("location_"))
 async def location_handler(callback: CallbackQuery, state: FSMContext):
     """Обработчик выбора локации"""
     location_map = {
         "location_street": LocationType.STREET,
-        "location_studio": LocationType.STUDIO,
+        "location_studio": LocationType.STUDIO, 
         "location_floor": LocationType.FLOOR_ZONE
     }
 
