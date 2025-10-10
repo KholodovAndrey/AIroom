@@ -148,7 +148,7 @@ async def generate_summary(data: Dict[str, Any]) -> str:
         view = data.get('white_bg_view', 'front')
         view_text = "Сзади" if view == "back" else "Спереди"
         summary_parts.append(f"👀 **Ракурс**: {view_text}")
-    elif gender != GenderType.DISPLAY:
+    elif gender != GenderType.FLAT_LAY:
         summary_parts.append(f"📏 **Рост модели**: {data.get('height', 'Не указан')} см")
         summary_parts.append(f"📐 **Длина изделия**: {data.get('length', 'Не указана')} см")
         summary_parts.append(f"📍 **Локация**: {data.get('location', LocationType.STUDIO).value}")
